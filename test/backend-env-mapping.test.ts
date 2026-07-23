@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mapCredentialToEnv } from "../src/backend-env-mapping.ts";
+import { defaultEnvVarName, mapCredentialToEnv } from "../src/backend-env-mapping.ts";
 
 describe("mapCredentialToEnv", () => {
 	it("maps github to GITHUB_TOKEN only", () => {
@@ -26,7 +26,19 @@ describe("mapCredentialToEnv", () => {
 		expect(mapCredentialToEnv("jira", { accessToken: "jira-x" })).toEqual({ JIRA_TOKEN: "jira-x" });
 	});
 
-	it("returns an empty mapping for an unknown backend rather than throwing", () => {
-		expect(mapCredentialToEnv("unknown-backend", { accessToken: "x" })).toEqual({});
+	it("maps an arbitrary/generic backend to its operator-chosen envVarName, stashed at login time", () => {
+		expect(mapCredentialToEnv("my-company-sso", { accessToken: "x", extra: { envVarName: "CUSTOM_SSO_TOKEN" } })).toEqual({ CUSTOM_SSO_TOKEN: "x" });
+	});
+
+	it("falls back to a sanitized default env var name for a generic backend when the operator didn't supply one", () => {
+		expect(mapCredentialToEnv("my-company-sso", { accessToken: "x" })).toEqual({ MY_COMPANY_SSO_TOKEN: "x" });
+	});
+});
+
+describe("defaultEnvVarName", () => {
+	it("uppercases and sanitizes an arbitrary backend name into a _TOKEN suffixed var name", () => {
+		expect(defaultEnvVarName("my-company-sso")).toBe("MY_COMPANY_SSO_TOKEN");
+		expect(defaultEnvVarName("weird.name!!")).toBe("WEIRD_NAME_TOKEN");
+		expect(defaultEnvVarName("--leading-trailing--")).toBe("LEADING_TRAILING_TOKEN");
 	});
 });

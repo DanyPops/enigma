@@ -26,6 +26,15 @@ export const ALL_CREDENTIAL_ENV_VAR_NAMES = [
 	"JENKINS_URL",
 ] as const;
 
+/**
+ * The four built-in backends get fixed, well-known env var names. Any
+ * other backend name (an operator-chosen generic OIDC backend, e.g. one
+ * pointed at a company's own SSO) has no name enigma could possibly know
+ * ahead of time — it uses `token.extra.envVarName`, stashed by the CLI's
+ * `login oidc --env-var` flag at login time, falling back to a sanitized
+ * default derived from the backend name itself if the operator didn't
+ * supply one.
+ */
 export function mapCredentialToEnv(backend: string, token: RefreshableAccessToken): Record<string, string> {
 	switch (backend) {
 		case "github":
@@ -40,7 +49,14 @@ export function mapCredentialToEnv(backend: string, token: RefreshableAccessToke
 				...(token.extra?.username ? { JENKINS_USER: token.extra.username } : {}),
 				...(token.extra?.url ? { JENKINS_URL: token.extra.url } : {}),
 			};
-		default:
-			return {};
+		default: {
+			const envVarName = token.extra?.envVarName ?? defaultEnvVarName(backend);
+			return { [envVarName]: token.accessToken };
+		}
 	}
+}
+
+/** `my-company-sso` -> `MY_COMPANY_SSO_TOKEN` — used only when the operator didn't pass `--env-var` at login time. */
+export function defaultEnvVarName(backend: string): string {
+	return `${backend.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "")}_TOKEN`;
 }

@@ -174,9 +174,9 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 				await waitFor(() => readLog(logPathA).some((l) => l.startsWith("start:")) && readLog(logPathB).some((l) => l.startsWith("start:")));
 				const lineA = readLog(logPathA).find((l) => l.startsWith("start:")) ?? "";
 				const lineB = readLog(logPathB).find((l) => l.startsWith("start:")) ?? "";
-				expect(lineA).toContain("JENKINS_API_TOKEN=supervised-real-tok");
-				expect(lineA).toContain("JENKINS_USER=bot");
-				expect(lineB).toContain("GITHUB_TOKEN=second-unit-real-tok");
+				expect(lineA).toContain(`"JENKINS_API_TOKEN":"supervised-real-tok"`);
+				expect(lineA).toContain(`"JENKINS_USER":"bot"`);
+				expect(lineB).toContain(`"GITHUB_TOKEN":"second-unit-real-tok"`);
 
 				// Real HTTP health check against the same process that's also supervising.
 				await waitFor(() => {

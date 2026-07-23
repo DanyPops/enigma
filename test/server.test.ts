@@ -3,20 +3,28 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { OidcFetch } from "../src/login-command.ts";
 import { createCredentialVault } from "../src/credential-vault.ts";
 import { createApp } from "../src/server.ts";
 
 const TOKEN = "test-supervisor-token";
 
+function jsonResponse(body: unknown, status = 200): Response {
+	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+/** Stubs GitLab's token endpoint refresh directly — the credential itself carries baseUrl/clientId, so resolveRefreshFn finds this without a name-based registry. */
+const gitlabRefreshFetch: OidcFetch = async (input) => {
+	const url = String(input);
+	if (url === "https://gitlab.example.com/oauth/token") {
+		return jsonResponse({ access_token: "rotated-gitlab-token", token_type: "bearer", expires_in: 7200 });
+	}
+	throw new Error(`unexpected fetch in test: ${url}`);
+};
+
 function buildDeps(dir: string) {
 	const vault = createCredentialVault({ dir, masterKey: randomBytes(32) });
-	return {
-		vault,
-		refreshRegistry: {
-			gitlab: async () => ({ accessToken: "rotated-gitlab-token" }),
-		},
-		token: TOKEN,
-	};
+	return { vault, token: TOKEN, fetchImpl: gitlabRefreshFetch };
 }
 
 function authed(path: string, init: RequestInit = {}): Request {
@@ -90,7 +98,7 @@ describe("enigma vault server", () => {
 		try {
 			const deps = buildDeps(dir);
 			const app = createApp(deps);
-			deps.vault.save("gitlab", { accessToken: "stale-gitlab-token" });
+			deps.vault.save("gitlab", { accessToken: "stale-gitlab-token", refreshToken: "r1", extra: { baseUrl: "https://gitlab.example.com", clientId: "c" } });
 
 			const response = await app.fetch(authed("/rotate/gitlab", { method: "POST" }));
 			expect(response.status).toBe(204);

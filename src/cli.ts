@@ -3,11 +3,17 @@ import { ensureAuthToken, readDaemonHandle } from "@danypops/daemon-kit/paths";
 import { connectEnigmaClient } from "./client.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import { serveMain, supervisorMain } from "./daemon.ts";
-import { loginGitHub, loginGitLab, loginJenkins } from "./login-command.ts";
+import { loginGitHub, loginGitLab, loginJenkins, loginOidc } from "./login-command.ts";
+import { defaultEnvVarName } from "./backend-env-mapping.ts";
 import { getOrCreateMasterKey, resolveKeyringIdentityFromEnv } from "./master-key.ts";
 import { resolveEnigmaExtraPaths, resolveEnigmaPaths } from "./paths.ts";
 
 const [, , command] = process.argv;
+
+function parseFlag(argv: string[], name: string): string | undefined {
+	const index = argv.indexOf(name);
+	return index !== -1 ? argv[index + 1] : undefined;
+}
 
 /**
  * Runs entirely client-side against each backend's own OAuth/credential
@@ -61,6 +67,31 @@ async function loginMain(backend: string | undefined): Promise<void> {
 		return;
 	}
 
+	if (backend === "oidc") {
+		const name = parseFlag(process.argv, "--name");
+		const issuerUrl = parseFlag(process.argv, "--issuer");
+		const clientId = parseFlag(process.argv, "--client-id");
+		const scope = parseFlag(process.argv, "--scope");
+		const envVar = parseFlag(process.argv, "--env-var");
+		if (!name || !issuerUrl || !clientId) {
+			console.error("usage: enigma login oidc --name <arbitrary-name> --issuer <url> --client-id <id> [--scope <scope>] [--env-var <VAR_NAME>]");
+			process.exit(1);
+		}
+		const token = await loginOidc({
+			issuerUrl,
+			clientId,
+			scope,
+			onPrompt: (p) => {
+				console.log(`Visit ${p.verificationUri} and enter code: ${p.userCode}`);
+				console.log("Waiting for authorization...");
+			},
+		});
+		token.extra = { ...token.extra, envVarName: envVar ?? defaultEnvVarName(name) };
+		vault.save(name, token);
+		console.log(`OIDC login complete for backend "${name}".`);
+		return;
+	}
+
 	if (backend === "jenkins") {
 		const { JENKINS_URL: url, JENKINS_USER: username, JENKINS_API_TOKEN: apiToken } = process.env;
 		if (!url || !username || !apiToken) {
@@ -72,7 +103,7 @@ async function loginMain(backend: string | undefined): Promise<void> {
 		return;
 	}
 
-	console.error("usage: enigma login <github|gitlab|jenkins>");
+	console.error("usage: enigma login <github|gitlab|jenkins|oidc>");
 	process.exit(1);
 }
 
@@ -139,6 +170,8 @@ switch (command) {
 				"  serve                          serve the vault only, no supervision\n" +
 				"  supervisor [--config <path>]   serve the vault and spawn configured daemons\n" +
 				"  login <github|gitlab|jenkins>  authenticate and store credentials for a backend\n" +
+				"  login oidc --name <name> --issuer <url> --client-id <id> [--scope][--env-var]\n" +
+				"                                 generic OIDC device flow for any compliant provider\n" +
 				"  rotate <backend>               force a refresh of a stored credential\n" +
 				"  revoke <backend>               delete a stored credential\n" +
 				"  list                           list backends with a stored credential\n" +

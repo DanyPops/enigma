@@ -47,7 +47,7 @@ describe("runSupervisor", () => {
 			const supervisor = runSupervisor(config, vault);
 			try {
 				await waitFor(() => readLog(logPath).length > 0);
-				expect(readLog(logPath)[0]).toContain("GITHUB_TOKEN=injected-gh-token");
+				expect(readLog(logPath)[0]).toContain(`"GITHUB_TOKEN":"injected-gh-token"`);
 			} finally {
 				await supervisor.stop();
 			}
@@ -68,9 +68,9 @@ describe("runSupervisor", () => {
 			try {
 				await waitFor(() => readLog(logPath).length > 0);
 				const line = readLog(logPath)[0] ?? "";
-				expect(line).toContain("JENKINS_API_TOKEN=jenkins-api-tok");
-				expect(line).toContain("JENKINS_USER=bot");
-				expect(line).toContain("JENKINS_URL=https://jenkins.example.com");
+				expect(line).toContain(`"JENKINS_API_TOKEN":"jenkins-api-tok"`);
+				expect(line).toContain(`"JENKINS_USER":"bot"`);
+				expect(line).toContain(`"JENKINS_URL":"https://jenkins.example.com"`);
 			} finally {
 				await supervisor.stop();
 			}
@@ -170,6 +170,37 @@ describe("runSupervisor", () => {
 			try {
 				await waitFor(() => readLog(logPath).filter((l) => l.startsWith("start:")).length >= 2, 4_000);
 				expect(readLog(logPath)).toContain("sigterm");
+			} finally {
+				await supervisor.stop();
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("scrubs an arbitrarily-named generic OIDC backend's credential from a unit that never requested it — the same leak class this scrub mechanism was built to close, now verified for the generic path too", async () => {
+		const dir = tmpDir();
+		try {
+			const logPathA = join(dir, "log-a.txt");
+			const logPathB = join(dir, "log-b.txt");
+			const vault = createCredentialVault({ dir: join(dir, "creds"), masterKey: randomBytes(32) });
+			vault.save("my-company-sso", { accessToken: "sso-secret-value", extra: { envVarName: "MY_COMPANY_SSO_TOKEN" } });
+
+			const config: SupervisorConfig = {
+				units: [
+					{ name: "unit-a", bin: "bun", args: [FIXTURE, logPathA], backends: ["my-company-sso"], restart: "no" },
+					{ name: "unit-b", bin: "bun", args: [FIXTURE, logPathB], backends: [], restart: "no" },
+				],
+			};
+			const supervisor = runSupervisor(config, vault);
+			try {
+				await waitFor(() => readLog(logPathA).some((l) => l.startsWith("start:")) && readLog(logPathB).some((l) => l.startsWith("start:")));
+				const lineA = readLog(logPathA).find((l) => l.startsWith("start:")) ?? "";
+				const lineB = readLog(logPathB).find((l) => l.startsWith("start:")) ?? "";
+				expect(lineA).toContain(`"MY_COMPANY_SSO_TOKEN":"sso-secret-value"`);
+				// unit-b never requested this backend — the arbitrary var name must be blanked, not absent-or-ambient.
+				expect(JSON.parse(lineB.slice("start:".length)).MY_COMPANY_SSO_TOKEN).toBe("");
+				expect(lineB).not.toContain("sso-secret-value");
 			} finally {
 				await supervisor.stop();
 			}

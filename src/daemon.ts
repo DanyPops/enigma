@@ -2,7 +2,6 @@
 import { runDaemonProcess } from "@danypops/daemon-kit/daemon";
 import { createLogger } from "@danypops/daemon-kit/logging";
 import { ensureAuthToken } from "@danypops/daemon-kit/paths";
-import { buildBackendRefreshRegistry } from "./backend-refresh.ts";
 import { createCredentialVault, type CredentialVault } from "./credential-vault.ts";
 import { getOrCreateMasterKey, resolveKeyringIdentityFromEnv } from "./master-key.ts";
 import { resolveEnigmaExtraPaths, resolveEnigmaPaths } from "./paths.ts";
@@ -24,13 +23,12 @@ export function serveMain(): void {
 	const paths = resolveEnigmaPaths();
 	const token = ensureAuthToken(paths.token, "Enigma");
 	const { vault } = buildVault();
-	const refreshRegistry = buildBackendRefreshRegistry();
 
 	runDaemonProcess({
 		daemonLabel: "Enigma",
 		handlePath: paths.handle,
 		logger,
-		buildApp: () => createApp({ vault, refreshRegistry, token }),
+		buildApp: () => createApp({ vault, token }),
 		onListen: ({ host, port }) => logger.info("listening", { host, port }),
 	});
 }
@@ -40,7 +38,6 @@ export function supervisorMain(configPathOverride?: string): void {
 	const paths = resolveEnigmaPaths();
 	const token = ensureAuthToken(paths.token, "Enigma");
 	const { vault, extra } = buildVault();
-	const refreshRegistry = buildBackendRefreshRegistry();
 	const config = loadSupervisorConfig(configPathOverride ?? extra.supervisorConfig);
 	const supervisor = runSupervisor(config, vault, { logger });
 
@@ -48,7 +45,7 @@ export function supervisorMain(configPathOverride?: string): void {
 		daemonLabel: "Enigma",
 		handlePath: paths.handle,
 		logger,
-		buildApp: () => createApp({ vault, refreshRegistry, token }),
+		buildApp: () => createApp({ vault, token }),
 		onShutdown: () => supervisor.stop(),
 		onListen: ({ host, port }) => logger.info("listening", { host, port, units: config.units.length }),
 	});

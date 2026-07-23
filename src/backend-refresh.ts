@@ -1,65 +1,78 @@
 /**
- * Per-backend token-refresh functions, keyed by backend name. This mapping
- * lives here, not in daemon-kit's vault module — daemon-kit knows only the
- * generic credential shape, never which backend issued it or how to renew
- * one. Each backend's own URL-shape/grant-type details are the small,
- * genuinely backend-specific residue this module exists to hold.
+ * Token refresh, resolved from what a credential's own `extra` field
+ * carries rather than a fixed backend-name registry. A GitLab-shaped
+ * credential (`extra.baseUrl` + `extra.clientId`, no `extra.issuerUrl`)
+ * and a generic-OIDC-shaped one (`extra.issuerUrl` + `extra.clientId`,
+ * stashed by loginOidc) both refresh through the exact same
+ * `openid-client` refresh_token grant — the only difference is how their
+ * Configuration is built. This is what makes refresh work for an
+ * arbitrarily operator-named OIDC backend with zero new code per name:
+ * capability follows the credential's own shape, not a name someone
+ * remembered to register.
  */
-import type { FetchLike, RefreshableAccessToken } from "@danypops/daemon-kit/vault";
+import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
+import * as oidc from "openid-client";
+import type { OidcFetch } from "./login-command.ts";
 
 export type RefreshFn = (current: RefreshableAccessToken) => Promise<RefreshableAccessToken>;
 
-/**
- * GitLab issues real, rotating refresh tokens (unlike GitHub's OAuth App
- * device flow, which never expires and has none). `baseUrl` and `clientId`
- * travel in the token's own `extra` field (stashed there at login time) so
- * refresh never needs a separate, easy-to-drift configuration store.
- */
-export function createGitLabRefresh(fetchImpl?: FetchLike): RefreshFn {
+function tokenFromRefreshResponse(response: oidc.TokenEndpointResponse, current: RefreshableAccessToken): RefreshableAccessToken {
+	return {
+		accessToken: response.access_token,
+		// Providers that rotate refresh tokens on use return a new one; keep the current one otherwise.
+		refreshToken: response.refresh_token ?? current.refreshToken,
+		expiresAt: response.expires_in !== undefined ? new Date(Date.now() + response.expires_in * 1000).toISOString() : undefined,
+		scope: response.scope ?? current.scope,
+		extra: current.extra,
+	};
+}
+
+function withCustomFetch(config: oidc.Configuration, fetchImpl?: OidcFetch): oidc.Configuration {
+	if (fetchImpl) config[oidc.customFetch] = fetchImpl;
+	return config;
+}
+
+/** GitLab's token endpoint follows a well-known, documented convention — refresh needs only that, not a full re-discovery (device_authorization_endpoint is irrelevant here). */
+function createGitLabRefresh(baseUrl: string, clientId: string, fetchImpl?: OidcFetch): RefreshFn {
 	return async (current: RefreshableAccessToken): Promise<RefreshableAccessToken> => {
-		const baseUrl = current.extra?.baseUrl;
-		const clientId = current.extra?.clientId;
-		if (!baseUrl || !clientId) {
-			throw new Error("GitLab credential is missing baseUrl/clientId in its extra fields — cannot refresh; re-run login");
-		}
-		if (!current.refreshToken) {
-			throw new Error("GitLab credential has no refresh token — cannot refresh; re-run login");
-		}
-		const doFetch = fetchImpl ?? fetch;
-		const response = await doFetch(`${baseUrl.replace(/\/$/, "")}/oauth/token`, {
-			method: "POST",
-			headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
-			body: new URLSearchParams({ client_id: clientId, refresh_token: current.refreshToken, grant_type: "refresh_token" }),
-		});
-		if (!response.ok) throw new Error(`GitLab token refresh failed: HTTP ${response.status}`);
-		const body = (await response.json()) as { access_token: string; refresh_token?: string; expires_in?: number; scope?: string };
-		return {
-			accessToken: body.access_token,
-			// GitLab rotates refresh tokens on use; keep the current one only if the response omits a new one.
-			refreshToken: body.refresh_token ?? current.refreshToken,
-			expiresAt: body.expires_in ? new Date(Date.now() + body.expires_in * 1000).toISOString() : undefined,
-			scope: body.scope,
-			extra: current.extra,
-		};
+		if (!current.refreshToken) throw new Error("GitLab credential has no refresh token — cannot refresh; re-run login");
+		const base = baseUrl.replace(/\/$/, "");
+		const config = withCustomFetch(new oidc.Configuration({ issuer: base, token_endpoint: `${base}/oauth/token` }, clientId), fetchImpl);
+		const response = await oidc.refreshTokenGrant(config, current.refreshToken);
+		return tokenFromRefreshResponse(response, current);
+	};
+}
+
+/** Generic OIDC re-discovers the issuer (a second round trip, accepted for how infrequent refreshes are) rather than requiring the token endpoint to be separately stashed at login time. */
+function createOidcRefresh(issuerUrl: string, clientId: string, fetchImpl?: OidcFetch): RefreshFn {
+	return async (current: RefreshableAccessToken): Promise<RefreshableAccessToken> => {
+		if (!current.refreshToken) throw new Error("OIDC credential has no refresh token — cannot refresh; re-run login");
+		const config = await oidc.discovery(
+			new URL(issuerUrl),
+			clientId,
+			undefined,
+			undefined,
+			fetchImpl ? { [oidc.customFetch]: fetchImpl } : undefined,
+		);
+		const response = await oidc.refreshTokenGrant(config, current.refreshToken);
+		return tokenFromRefreshResponse(response, current);
 	};
 }
 
 /**
- * Registry consulted by the `/rotate/:backend` route and `enigma rotate`.
- * `undefined` means "this backend has nothing to refresh" (GitHub OAuth App
- * tokens never expire; Jenkins is a static username+API-token pair with no
- * OAuth lifecycle at all) rather than a silently-missing feature.
- *
- * Jira/Atlassian 3LO does issue refresh tokens, but that flow isn't ported
- * here yet — an explicit, flagged gap, not a silent omission. `enigma
- * rotate jira` returns a clear "not yet supported" error rather than
- * pretending to succeed.
+ * `undefined` means "this credential carries nothing refreshable" — GitHub
+ * OAuth App tokens never expire and issue no refresh token; Jenkins is a
+ * static username+API-token pair with no OAuth lifecycle at all; Jira's
+ * Atlassian 3LO refresh isn't ported here yet (an explicit, flagged gap,
+ * not a silent omission) since it doesn't stash issuerUrl/baseUrl in
+ * `extra` the way GitLab/generic-OIDC logins do.
  */
-export function buildBackendRefreshRegistry(fetchImpl?: FetchLike): Record<string, RefreshFn | undefined> {
-	return {
-		gitlab: createGitLabRefresh(fetchImpl),
-		github: undefined,
-		jenkins: undefined,
-		jira: undefined,
-	};
+export function resolveRefreshFn(credential: RefreshableAccessToken, fetchImpl?: OidcFetch): RefreshFn | undefined {
+	if (credential.extra?.issuerUrl && credential.extra?.clientId) {
+		return createOidcRefresh(credential.extra.issuerUrl, credential.extra.clientId, fetchImpl);
+	}
+	if (credential.extra?.baseUrl && credential.extra?.clientId) {
+		return createGitLabRefresh(credential.extra.baseUrl, credential.extra.clientId, fetchImpl);
+	}
+	return undefined;
 }

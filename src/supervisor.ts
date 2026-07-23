@@ -27,15 +27,37 @@ interface ManagedUnit {
 }
 
 /**
+ * Every env var name that *could* apply across the whole supervisor
+ * config, not just one unit — the four built-ins' fixed names plus
+ * whatever `envVarName` each declared backend's *stored* credential
+ * actually carries (arbitrary, operator-chosen names included). Computed
+ * fresh from the current config + vault state rather than a static
+ * constant, since an operator can add a new generic OIDC backend between
+ * supervisor restarts and its var name must be scrubbable too.
+ */
+function collectAllPossibleEnvVarNames(config: SupervisorConfig, vault: CredentialVault): Set<string> {
+	const names = new Set<string>(ALL_CREDENTIAL_ENV_VAR_NAMES);
+	for (const unit of config.units) {
+		for (const backend of unit.backends) {
+			const credential = vault.get(backend);
+			if (!credential) continue;
+			for (const name of Object.keys(mapCredentialToEnv(backend, credential))) names.add(name);
+		}
+	}
+	return names;
+}
+
+/**
  * Starts from an all-blank baseline covering every credential-shaped var
- * name this or any other backend could produce, then overlays only this
+ * name any unit in this config could produce, then overlays only this
  * unit's own requested backends' real values — so an ambient value on
  * enigma's own process for a var this unit never asked for is always
  * overridden to "", never silently inherited through spawnUnit's
- * parent-env passthrough.
+ * parent-env passthrough. Covers arbitrarily-named generic OIDC backends
+ * exactly the same way it covers the four built-ins.
  */
-function resolveUnitEnv(unit: DaemonUnit, vault: CredentialVault): Record<string, string> {
-	const env: Record<string, string> = Object.fromEntries(ALL_CREDENTIAL_ENV_VAR_NAMES.map((name) => [name, ""]));
+function resolveUnitEnv(unit: DaemonUnit, vault: CredentialVault, allPossibleNames: Set<string>): Record<string, string> {
+	const env: Record<string, string> = Object.fromEntries([...allPossibleNames].map((name) => [name, ""]));
 	for (const backend of unit.backends) {
 		const credential = vault.get(backend);
 		if (!credential) continue; // missing credential: spawn anyway, best-effort — the unit's own env resolution will surface the gap
@@ -71,7 +93,7 @@ export function runSupervisor(config: SupervisorConfig, vault: CredentialVault, 
 	const managed: ManagedUnit[] = config.units.map((unit) => ({ unit, stopping: false, refreshing: false }));
 
 	function launch(entry: ManagedUnit): void {
-		const env = resolveUnitEnv(entry.unit, vault);
+		const env = resolveUnitEnv(entry.unit, vault, collectAllPossibleEnvVarNames(config, vault));
 		const spawned = spawnUnit(entry.unit, env);
 		entry.current = spawned;
 		logger.info("unit started", { name: entry.unit.name, pid: spawned.pid });

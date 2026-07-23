@@ -64,11 +64,46 @@ enigma supervisor [--config <path>]
                                   serve the vault and spawn configured daemons
 enigma login <github|gitlab|jenkins>
                                   authenticate and store credentials for a backend
+enigma login oidc --name <name> --issuer <url> --client-id <id> [--scope <scope>] [--env-var <VAR_NAME>]
+                                  generic OIDC device flow for any compliant provider
 enigma rotate <backend>           force a refresh of a stored credential
 enigma revoke <backend>           delete a stored credential
 enigma list                       list backends with a stored credential
 enigma health                     talk to a running instance, print status JSON
 ```
+
+All OAuth/OIDC mechanics (discovery, device-flow polling, refresh) run
+through [`openid-client`](https://github.com/panva/openid-client) (OpenID
+Certified — Basic, FAPI 1.0, FAPI 2.0), not hand-rolled protocol code.
+GitHub has no OIDC discovery at all (confirmed: `.well-known/openid-configuration`
+404s) — its `Configuration` is built from its two fixed, documented
+endpoints. GitLab supports discovery for its general server metadata, but
+its own discovery document always reports `device_authorization_endpoint`
+as `null` even on instances that advertise `device_code` as a supported
+grant type (confirmed live on two independent instances — a genuine GitLab
+inconsistency, not an assumption); the endpoint is patched in from GitLab's
+documented conventional path after discovery. Any other OIDC-compliant
+provider goes through `enigma login oidc` with pure discovery and zero
+backend-specific code.
+
+### The generic OIDC backend — no company or product ever named in source
+
+`enigma login oidc` is how an organization's own SSO (or any other
+OIDC-compliant identity provider — Okta, Auth0, or an organization's own,
+whatever) becomes usable, without a single line of enigma source code referencing it. The
+backend name, issuer URL, and client ID are all operator-supplied at
+runtime:
+
+```bash
+enigma login oidc --name my-company-sso --issuer https://sso.example.com/realms/employees --client-id my-app
+```
+
+The env var a spawned unit sees defaults to `<NAME>_TOKEN` (sanitized,
+uppercased) or can be set explicitly with `--env-var`. Refresh works
+automatically for any backend logged in this way — capability is resolved
+from what the stored credential's own metadata carries (`issuerUrl` +
+`clientId`), not from a fixed name registry, so a new generic backend
+never needs new enigma code to support rotation.
 
 `login` runs entirely client-side against each backend's own OAuth or
 credential mechanics, writing directly into the same encrypted store the

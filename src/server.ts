@@ -6,14 +6,16 @@
  * regardless of what this server does.
  */
 import { errorResponse, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "@danypops/daemon-kit/http";
-import type { RefreshFn } from "./backend-refresh.ts";
+import { resolveRefreshFn } from "./backend-refresh.ts";
 import type { CredentialVault } from "./credential-vault.ts";
+import type { OidcFetch } from "./login-command.ts";
 import { VERSION } from "./version.ts";
 
 export interface ServerDeps {
 	vault: CredentialVault;
-	refreshRegistry: Record<string, RefreshFn | undefined>;
 	token: string;
+	/** Test-only injection point; production leaves this unset and uses global fetch. */
+	fetchImpl?: OidcFetch;
 }
 
 function pathBackend(pathname: string, prefix: string): string | undefined {
@@ -45,10 +47,10 @@ export function createApp(deps: ServerDeps): { fetch(request: Request): Promise<
 
 			const rotateBackend = pathBackend(url.pathname, "/rotate/");
 			if (request.method === "POST" && rotateBackend) {
-				const refresh = deps.refreshRegistry[rotateBackend];
-				if (!refresh) return errorResponse(`backend "${rotateBackend}" has no refresh function configured`, 400);
 				const current = deps.vault.get(rotateBackend);
 				if (!current) return errorResponse(`no credential stored for backend "${rotateBackend}"`, 404);
+				const refresh = resolveRefreshFn(current, deps.fetchImpl);
+				if (!refresh) return errorResponse(`backend "${rotateBackend}" has no refresh function configured`, 400);
 				try {
 					const refreshed = await refresh(current);
 					deps.vault.save(rotateBackend, refreshed);
