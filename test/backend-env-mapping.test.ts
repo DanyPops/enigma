@@ -22,8 +22,12 @@ describe("mapCredentialToEnv", () => {
 		});
 	});
 
-	it("maps jira to JIRA_TOKEN only", () => {
-		expect(mapCredentialToEnv("jira", { accessToken: "jira-x" })).toEqual({ JIRA_TOKEN: "jira-x" });
+	it("maps jira to JIRA_API_TOKEN plus JIRA_URL when the credential carries a siteUrl — matching Tickets' actual config.ts expectations, not a bare JIRA_TOKEN", () => {
+		expect(mapCredentialToEnv("jira", { accessToken: "jira-x", extra: { siteUrl: "https://my-site.atlassian.net" } })).toEqual({
+			JIRA_API_TOKEN: "jira-x",
+			JIRA_URL: "https://my-site.atlassian.net",
+		});
+		expect(mapCredentialToEnv("jira", { accessToken: "jira-x" })).toEqual({ JIRA_API_TOKEN: "jira-x" });
 	});
 
 	it("maps an arbitrary/generic backend to its operator-chosen envVarName, stashed at login time", () => {

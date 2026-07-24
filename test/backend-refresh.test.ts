@@ -66,4 +66,33 @@ describe("resolveRefreshFn", () => {
 		};
 		await expect(resolveRefreshFn(credential, fetchImpl)!(credential)).rejects.toThrow(/no refresh token/);
 	});
+
+	it("resolves a Jira-shaped refresh function (cloudId + clientId + clientSecret) that authenticates with client_secret, distinct from GitLab/generic-OIDC's public-client shape", async () => {
+		const credential = { accessToken: "stale", refreshToken: "jira-r1", extra: { cloudId: "cloud-1", siteUrl: "https://my-site.atlassian.net", clientId: "jc", clientSecret: "js" } };
+		const fetchImpl: OidcFetch = async (input) => {
+			const url = String(input);
+			if (url === "https://auth.atlassian.com/oauth/token") {
+				return jsonResponse({ access_token: "jira-fresh", refresh_token: "jira-r2", expires_in: 3600, token_type: "bearer" });
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		};
+		const refreshed = await resolveRefreshFn(credential, fetchImpl)!(credential);
+		expect(refreshed.accessToken).toBe("jira-fresh");
+		expect(refreshed.refreshToken).toBe("jira-r2");
+		expect(refreshed.extra).toEqual(credential.extra);
+	});
+
+	it("treats a Jira refresh response missing a rotated refresh token as an error, not as \"keep the current one\" — Atlassian's refresh tokens are single-use, unlike GitLab's", async () => {
+		const credential = { accessToken: "stale", refreshToken: "jira-r1", extra: { cloudId: "cloud-1", clientId: "jc", clientSecret: "js" } };
+		const fetchImpl: OidcFetch = async () => jsonResponse({ access_token: "jira-fresh", expires_in: 3600, token_type: "bearer" });
+		await expect(resolveRefreshFn(credential, fetchImpl)!(credential)).rejects.toThrow(/no rotated refresh token/);
+	});
+
+	it("throws a clear error for a Jira credential with no refresh token, without attempting a request", async () => {
+		const credential = { accessToken: "stale", extra: { cloudId: "cloud-1", clientId: "jc", clientSecret: "js" } };
+		const fetchImpl: OidcFetch = async () => {
+			throw new Error("should not be called");
+		};
+		await expect(resolveRefreshFn(credential, fetchImpl)!(credential)).rejects.toThrow(/no refresh token/);
+	});
 });

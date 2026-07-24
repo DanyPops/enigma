@@ -132,11 +132,27 @@ human, per-instance registration step is unavoidable:
 - **Jenkins**: no OAuth exists. Generate an API token from your Jenkins
   user's Configure page, then set `JENKINS_URL`, `JENKINS_USER`,
   `JENKINS_API_TOKEN` before running `enigma login jenkins`.
+- **Jira Cloud**: register an OAuth 2.0 (3LO) app at
+  `developer.atlassian.com/console/myapps`, enable OAuth 2.0 (3LO), and
+  set the app's Callback URL to `http://127.0.0.1:8976/callback` (or a
+  different port of your choosing, matched by `JIRA_CALLBACK_PORT`).
+  Jira Cloud's OAuth is authorization-code only — there is no device flow
+  — and PKCE support is flag-gated per app by Atlassian support rather
+  than universally available, so this uses the documented, always-available
+  confidential-client path instead: set `JIRA_CLIENT_ID` and
+  `JIRA_CLIENT_SECRET` before running `enigma login jira`. Include
+  `offline_access` in `--scope`/`JIRA_SCOPES` to get a refresh token —
+  without it the credential can't be renewed and will need a fresh login
+  once the access token expires. If the app is authorized against more
+  than one Jira site, pass `--site <name-or-url>` to disambiguate.
 
 GitHub's classic OAuth App device-flow tokens never expire and issue no
 refresh token (confirmed against GitHub's own docs — the example device-
 flow response has no `refresh_token` field at all; refresh is a
-GitHub-App-only feature). GitLab and Jira do issue real refresh tokens.
+GitHub-App-only feature). GitLab and Jira Cloud do issue refresh tokens —
+Jira's are rotating (each refresh invalidates the one just used and
+returns a new one), unlike GitLab's, which persist unless the server
+chooses to rotate them.
 
 ## Supervisor config
 

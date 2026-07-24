@@ -3,7 +3,9 @@ import { ensureAuthToken, readDaemonHandle } from "@danypops/daemon-kit/paths";
 import { connectEnigmaClient } from "./client.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import { serveMain, supervisorMain } from "./daemon.ts";
-import { loginGitHub, loginGitLab, loginJenkins, loginOidc } from "./login-command.ts";
+import { loginGitHub, loginGitLab, loginJenkins, loginJiraCloud, loginOidc } from "./login-command.ts";
+
+const JIRA_DEFAULT_CALLBACK_PORT = 8976;
 import { defaultEnvVarName } from "./backend-env-mapping.ts";
 import { getOrCreateMasterKey, resolveKeyringIdentityFromEnv } from "./master-key.ts";
 import { resolveEnigmaExtraPaths, resolveEnigmaPaths } from "./paths.ts";
@@ -92,6 +94,36 @@ async function loginMain(backend: string | undefined): Promise<void> {
 		return;
 	}
 
+	if (backend === "jira") {
+		const clientId = process.env.JIRA_CLIENT_ID;
+		const clientSecret = process.env.JIRA_CLIENT_SECRET;
+		const site = parseFlag(process.argv, "--site");
+		const scope = parseFlag(process.argv, "--scope") ?? process.env.JIRA_SCOPES;
+		const callbackPort = Number(process.env.JIRA_CALLBACK_PORT ?? JIRA_DEFAULT_CALLBACK_PORT);
+		if (!clientId || !clientSecret) {
+			console.error(
+				"JIRA_CLIENT_ID and JIRA_CLIENT_SECRET are required — register an OAuth 2.0 (3LO) app at developer.atlassian.com/console/myapps, " +
+					`with Callback URL http://127.0.0.1:${callbackPort}/callback (or set JIRA_CALLBACK_PORT to match a different registered port). ` +
+					"Include offline_access in --scope/JIRA_SCOPES for a refresh token.",
+			);
+			process.exit(1);
+		}
+		const token = await loginJiraCloud({
+			clientId,
+			clientSecret,
+			scope,
+			callbackPort,
+			site,
+			onAuthUrl: (url) => {
+				console.log(`Visit this URL to authorize: ${url}`);
+				console.log("Waiting for the callback...");
+			},
+		});
+		vault.save("jira", token);
+		console.log("Jira login complete.");
+		return;
+	}
+
 	if (backend === "jenkins") {
 		const { JENKINS_URL: url, JENKINS_USER: username, JENKINS_API_TOKEN: apiToken } = process.env;
 		if (!url || !username || !apiToken) {
@@ -103,7 +135,7 @@ async function loginMain(backend: string | undefined): Promise<void> {
 		return;
 	}
 
-	console.error("usage: enigma login <github|gitlab|jenkins|oidc>");
+	console.error("usage: enigma login <github|gitlab|jenkins|jira|oidc>");
 	process.exit(1);
 }
 
@@ -170,6 +202,8 @@ switch (command) {
 				"  serve                          serve the vault only, no supervision\n" +
 				"  supervisor [--config <path>]   serve the vault and spawn configured daemons\n" +
 				"  login <github|gitlab|jenkins>  authenticate and store credentials for a backend\n" +
+				"  login jira [--site <name-or-url>] [--scope <scope>]\n" +
+				"                                 Jira Cloud OAuth 2.0 (3LO), via JIRA_CLIENT_ID/JIRA_CLIENT_SECRET\n" +
 				"  login oidc --name <name> --issuer <url> --client-id <id> [--scope][--env-var]\n" +
 				"                                 generic OIDC device flow for any compliant provider\n" +
 				"  rotate <backend>               force a refresh of a stored credential\n" +

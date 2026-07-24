@@ -8,7 +8,10 @@
  * Configuration is built. This is what makes refresh work for an
  * arbitrarily operator-named OIDC backend with zero new code per name:
  * capability follows the credential's own shape, not a name someone
- * remembered to register.
+ * remembered to register. Jira Cloud is the one exception needing its own
+ * shape check (`extra.cloudId`), since it is client_secret-authenticated
+ * rather than public-client, and its refresh tokens rotate on every use
+ * rather than persisting.
  */
 import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
 import * as oidc from "openid-client";
@@ -30,6 +33,38 @@ function tokenFromRefreshResponse(response: oidc.TokenEndpointResponse, current:
 function withCustomFetch(config: oidc.Configuration, fetchImpl?: OidcFetch): oidc.Configuration {
 	if (fetchImpl) config[oidc.customFetch] = fetchImpl;
 	return config;
+}
+
+/**
+ * Atlassian issues rotating refresh tokens: each successful refresh
+ * invalidates the token just used and returns a new one (confirmed
+ * against Atlassian's own docs and multiple corroborating reports of
+ * `invalid_grant` failures from treating them as persistent). A response
+ * missing a new refresh token is therefore an error condition, not a
+ * "keep the current one" case the way GitLab's non-rotating refresh is.
+ */
+function tokenFromRotatingRefreshResponse(response: oidc.TokenEndpointResponse, current: RefreshableAccessToken): RefreshableAccessToken {
+	if (!response.refresh_token) throw new Error("Jira refresh response carried no rotated refresh token — Atlassian's refresh tokens are single-use; this should not happen on a successful refresh");
+	return {
+		accessToken: response.access_token,
+		refreshToken: response.refresh_token,
+		expiresAt: response.expires_in !== undefined ? new Date(Date.now() + response.expires_in * 1000).toISOString() : undefined,
+		scope: response.scope ?? current.scope,
+		extra: current.extra,
+	};
+}
+
+/** Jira Cloud's refresh grant is client_secret-authenticated, matching login — both clientId and clientSecret must have been stashed in extra at login time. */
+function createJiraRefresh(clientId: string, clientSecret: string, fetchImpl?: OidcFetch): RefreshFn {
+	return async (current: RefreshableAccessToken): Promise<RefreshableAccessToken> => {
+		if (!current.refreshToken) throw new Error("Jira credential has no refresh token — cannot refresh; re-run login with the offline_access scope");
+		const config = withCustomFetch(
+			new oidc.Configuration({ issuer: "https://auth.atlassian.com", token_endpoint: "https://auth.atlassian.com/oauth/token" }, clientId, undefined, oidc.ClientSecretPost(clientSecret)),
+			fetchImpl,
+		);
+		const response = await oidc.refreshTokenGrant(config, current.refreshToken);
+		return tokenFromRotatingRefreshResponse(response, current);
+	};
 }
 
 /** GitLab's token endpoint follows a well-known, documented convention — refresh needs only that, not a full re-discovery (device_authorization_endpoint is irrelevant here). */
@@ -62,12 +97,12 @@ function createOidcRefresh(issuerUrl: string, clientId: string, fetchImpl?: Oidc
 /**
  * `undefined` means "this credential carries nothing refreshable" — GitHub
  * OAuth App tokens never expire and issue no refresh token; Jenkins is a
- * static username+API-token pair with no OAuth lifecycle at all; Jira's
- * Atlassian 3LO refresh isn't ported here yet (an explicit, flagged gap,
- * not a silent omission) since it doesn't stash issuerUrl/baseUrl in
- * `extra` the way GitLab/generic-OIDC logins do.
+ * static username+API-token pair with no OAuth lifecycle at all.
  */
 export function resolveRefreshFn(credential: RefreshableAccessToken, fetchImpl?: OidcFetch): RefreshFn | undefined {
+	if (credential.extra?.cloudId && credential.extra?.clientId && credential.extra?.clientSecret) {
+		return createJiraRefresh(credential.extra.clientId, credential.extra.clientSecret, fetchImpl);
+	}
 	if (credential.extra?.issuerUrl && credential.extra?.clientId) {
 		return createOidcRefresh(credential.extra.issuerUrl, credential.extra.clientId, fetchImpl);
 	}

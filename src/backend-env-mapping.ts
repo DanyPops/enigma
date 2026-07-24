@@ -20,7 +20,8 @@ export const ALL_CREDENTIAL_ENV_VAR_NAMES = [
 	"GITHUB_TOKEN",
 	"GITLAB_TOKEN",
 	"GITLAB_URL",
-	"JIRA_TOKEN",
+	"JIRA_API_TOKEN",
+	"JIRA_URL",
 	"JENKINS_API_TOKEN",
 	"JENKINS_USER",
 	"JENKINS_URL",
@@ -42,7 +43,8 @@ export function mapCredentialToEnv(backend: string, token: RefreshableAccessToke
 		case "gitlab":
 			return { GITLAB_TOKEN: token.accessToken, ...(token.extra?.baseUrl ? { GITLAB_URL: token.extra.baseUrl } : {}) };
 		case "jira":
-			return { JIRA_TOKEN: token.accessToken };
+			// Tickets' own config.ts reads JIRA_API_TOKEN + JIRA_URL, not a bare JIRA_TOKEN — confirmed by reading its source directly.
+			return { JIRA_API_TOKEN: token.accessToken, ...(token.extra?.siteUrl ? { JIRA_URL: token.extra.siteUrl } : {}) };
 		case "jenkins":
 			return {
 				JENKINS_API_TOKEN: token.accessToken,

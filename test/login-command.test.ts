@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { loginGitHub, loginGitLab, loginJenkins, loginOidc, type OidcFetch } from "../src/login-command.ts";
+import { loginGitHub, loginGitLab, loginJenkins, loginJiraCloud, loginOidc, type JiraCallbackListener, type OidcFetch } from "../src/login-command.ts";
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -141,6 +141,126 @@ describe("loginOidc", () => {
 		await expect(loginOidc({ issuerUrl: "https://idp.example.com", clientId: "c", fetchImpl, onPrompt: () => {} })).rejects.toThrow(
 			/does not advertise a device_authorization_endpoint/,
 		);
+	});
+});
+
+describe("loginJiraCloud", () => {
+	function tokenExchangeAndSingleSiteFetch(): OidcFetch {
+		return async (input) => {
+			const url = String(input);
+			if (url === "https://auth.atlassian.com/oauth/token") {
+				return jsonResponse({ access_token: "jira-at", refresh_token: "jira-rt", expires_in: 3600, scope: "read:jira-work offline_access", token_type: "bearer" });
+			}
+			if (url === "https://api.atlassian.com/oauth/token/accessible-resources") {
+				return jsonResponse([{ id: "cloud-1", name: "My Site", url: "https://my-site.atlassian.net", scopes: ["read:jira-work"] }]);
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		};
+	}
+
+	it("exchanges the authorization code, looks up the cloudId, and stashes everything refresh will need in extra", async () => {
+		let authUrl: string | undefined;
+		const capturingListener: JiraCallbackListener = {
+			redirectUri: "http://127.0.0.1:8976/callback",
+			waitForCallback: async () => {
+				const state = new URL(authUrl!).searchParams.get("state")!;
+				return { code: "auth-code-1", state };
+			},
+			close: () => {},
+		};
+		const token = await loginJiraCloud({
+			clientId: "jira-client",
+			clientSecret: "jira-secret",
+			callbackPort: 8976,
+			listener: capturingListener,
+			fetchImpl: tokenExchangeAndSingleSiteFetch(),
+			onAuthUrl: (url) => (authUrl = url),
+		});
+		expect(authUrl).toContain("https://auth.atlassian.com/authorize?");
+		expect(authUrl).toContain("prompt=consent");
+		expect(authUrl).toContain("audience=api.atlassian.com");
+		expect(token.accessToken).toBe("jira-at");
+		expect(token.refreshToken).toBe("jira-rt");
+		expect(token.extra).toEqual({ clientId: "jira-client", clientSecret: "jira-secret", cloudId: "cloud-1", siteUrl: "https://my-site.atlassian.net" });
+	});
+
+	it("rejects a callback whose state does not match — possible CSRF", async () => {
+		const listener: JiraCallbackListener = { redirectUri: "http://127.0.0.1:8976/callback", waitForCallback: async () => ({ code: "c", state: "wrong-state" }), close: () => {} };
+		await expect(
+			loginJiraCloud({ clientId: "c", clientSecret: "s", callbackPort: 8976, listener, fetchImpl: async () => new Response("", { status: 500 }), onAuthUrl: () => {} }),
+		).rejects.toThrow(/state mismatch/);
+	});
+
+	it("surfaces an authorization error from the callback (e.g. the user denied consent) as a real error", async () => {
+		const listener: JiraCallbackListener = { redirectUri: "http://127.0.0.1:8976/callback", waitForCallback: async () => ({ error: "access_denied" }), close: () => {} };
+		await expect(
+			loginJiraCloud({ clientId: "c", clientSecret: "s", callbackPort: 8976, listener, fetchImpl: async () => new Response("", { status: 500 }), onAuthUrl: () => {} }),
+		).rejects.toThrow(/access_denied/);
+	});
+
+	it("throws a clear, actionable error when accessible-resources returns multiple sites and none is disambiguated", async () => {
+		let capturedState = "";
+		const listener: JiraCallbackListener = {
+			redirectUri: "http://127.0.0.1:8976/callback",
+			waitForCallback: async () => ({ code: "c", state: capturedState }),
+			close: () => {},
+		};
+		const fetchImpl: OidcFetch = async (input) => {
+			const url = String(input);
+			if (url === "https://auth.atlassian.com/oauth/token") return jsonResponse({ access_token: "at", expires_in: 3600, token_type: "bearer" });
+			if (url === "https://api.atlassian.com/oauth/token/accessible-resources") {
+				return jsonResponse([
+					{ id: "cloud-1", name: "Site One", url: "https://site-one.atlassian.net", scopes: [] },
+					{ id: "cloud-2", name: "Site Two", url: "https://site-two.atlassian.net", scopes: [] },
+				]);
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		};
+		await expect(
+			loginJiraCloud({
+				clientId: "c",
+				clientSecret: "s",
+				callbackPort: 8976,
+				listener,
+				fetchImpl,
+				onAuthUrl: (url) => {
+					capturedState = new URL(url).searchParams.get("state")!;
+				},
+			}),
+		).rejects.toThrow(/multiple sites/);
+	});
+
+	it("resolves the right site when disambiguated via the site option", async () => {
+		let capturedState = "";
+		const listener: JiraCallbackListener = {
+			redirectUri: "http://127.0.0.1:8976/callback",
+			waitForCallback: async () => ({ code: "c", state: capturedState }),
+			close: () => {},
+		};
+		const fetchImpl: OidcFetch = async (input) => {
+			const url = String(input);
+			if (url === "https://auth.atlassian.com/oauth/token") return jsonResponse({ access_token: "at", expires_in: 3600, token_type: "bearer" });
+			if (url === "https://api.atlassian.com/oauth/token/accessible-resources") {
+				return jsonResponse([
+					{ id: "cloud-1", name: "Site One", url: "https://site-one.atlassian.net", scopes: [] },
+					{ id: "cloud-2", name: "Site Two", url: "https://site-two.atlassian.net", scopes: [] },
+				]);
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		};
+		const token = await loginJiraCloud({
+			clientId: "c",
+			clientSecret: "s",
+			callbackPort: 8976,
+			site: "site-two",
+			listener,
+			fetchImpl,
+			onAuthUrl: (url) => {
+				capturedState = new URL(url).searchParams.get("state")!;
+			},
+		});
+		expect(token.extra?.cloudId).toBe("cloud-2");
+		expect(token.extra?.siteUrl).toBe("https://site-two.atlassian.net");
 	});
 });
 

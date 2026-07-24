@@ -25,6 +25,20 @@
  *    identity provider, etc.): pure discovery, zero backend-specific
  *    knowledge — this is the generic path, and it never needs to name a specific company's
  *    instance anywhere in this file.
+ *  - Jira Cloud (Atlassian OAuth 2.0 "3LO"): no OIDC discovery at all, and
+ *    unlike GitHub/GitLab there is no device flow — authorization code
+ *    only, confirmed against Atlassian's own docs. PKCE support is
+ *    flag-gated per app by Atlassian support rather than universally
+ *    available, so this uses the documented, guaranteed-available
+ *    confidential-client path (client_secret) instead of assuming PKCE.
+ *    Confirmed live that Atlassian's token endpoint accepts standard RFC
+ *    6749 form-urlencoded requests identically to the JSON shape shown in
+ *    their own docs (same error either way for a fake client), so
+ *    openid-client's standard authorizationCodeGrant needs no
+ *    modification. Multi-tenant: a cloudId must be looked up via a
+ *    separate accessible-resources call after the token exchange, since
+ *    every subsequent Jira API call is scoped through api.atlassian.com/
+ *    ex/jira/{cloudId}/..., not the site's own domain.
  */
 import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
 import * as oidc from "openid-client";
@@ -167,6 +181,154 @@ export async function loginOidc(options: OidcLoginOptions): Promise<RefreshableA
 		throw new Error(`${options.issuerUrl} does not advertise a device_authorization_endpoint — this provider may not support the device grant`);
 	}
 	return runDeviceFlow(config, options.scope, options.onPrompt, { issuerUrl: options.issuerUrl, clientId: options.clientId });
+}
+
+// ── Jira Cloud (OAuth 2.0 3LO) ──────────────────────────────────────────────
+
+const JIRA_AUTHORIZATION_ENDPOINT = "https://auth.atlassian.com/authorize";
+const JIRA_TOKEN_ENDPOINT = "https://auth.atlassian.com/oauth/token";
+const JIRA_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources";
+
+export interface AccessibleResource {
+	id: string;
+	name: string;
+	url: string;
+	scopes: string[];
+}
+
+interface JiraCallbackResult {
+	code: string;
+	state: string;
+}
+
+export interface JiraCallbackListener {
+	redirectUri: string;
+	/** Resolves, never rejects — an OAuth error or a malformed callback is a result, not an exception. */
+	waitForCallback(): Promise<JiraCallbackResult | { error: string }>;
+	close(): void;
+}
+
+/**
+ * Binds a fixed, documented port on 127.0.0.1, not an OS-assigned one.
+ * Atlassian's docs state the redirect_uri "must match" the registered
+ * Callback URL with no RFC 8252 loopback-port-exemption language the way
+ * GitLab's Doorkeeper backend has (confirmed by reading Doorkeeper's own
+ * source in earlier work on this project) — so the operator registers
+ * this exact port once, and every login reuses it.
+ */
+export function startJiraCallbackListener(port: number): JiraCallbackListener {
+	let resolveCallback: (result: JiraCallbackResult | { error: string }) => void;
+	const waiter = new Promise<JiraCallbackResult | { error: string }>((resolve) => {
+		resolveCallback = resolve;
+	});
+
+	const server = Bun.serve({
+		hostname: "127.0.0.1",
+		port,
+		fetch(request) {
+			const url = new URL(request.url);
+			if (url.pathname !== "/callback") return new Response("not found", { status: 404 });
+			const code = url.searchParams.get("code");
+			const state = url.searchParams.get("state");
+			const error = url.searchParams.get("error");
+			if (error) {
+				resolveCallback({ error });
+				return new Response(`<html><body>Authorization failed: ${error}. You can close this tab.</body></html>`, { headers: { "content-type": "text/html" } });
+			}
+			if (!code || !state) {
+				resolveCallback({ error: "missing code or state" });
+				return new Response("<html><body>Missing code or state.</body></html>", { status: 400, headers: { "content-type": "text/html" } });
+			}
+			resolveCallback({ code, state });
+			return new Response("<html><body>Authorization complete. You can close this tab.</body></html>", { headers: { "content-type": "text/html" } });
+		},
+	});
+
+	return {
+		redirectUri: `http://127.0.0.1:${port}/callback`,
+		waitForCallback: () => waiter,
+		close: () => server.stop(true),
+	};
+}
+
+export interface JiraCloudLoginOptions {
+	clientId: string;
+	clientSecret: string;
+	scope?: string;
+	/** Fixed port matching the operator's registered Callback URL. */
+	callbackPort: number;
+	fetchImpl?: OidcFetch;
+	/** Displays the URL to visit — unlike device flow there is no short user code, just a link. */
+	onAuthUrl: (url: string) => void;
+	/** Disambiguates when accessible-resources returns more than one site (URL or name substring match). */
+	site?: string;
+	/** Injectable for tests; production default starts a real loopback listener on callbackPort. */
+	listener?: JiraCallbackListener;
+}
+
+function jiraConfiguration(options: Pick<JiraCloudLoginOptions, "clientId" | "clientSecret" | "fetchImpl">): oidc.Configuration {
+	return withCustomFetch(
+		new oidc.Configuration({ issuer: "https://auth.atlassian.com", authorization_endpoint: JIRA_AUTHORIZATION_ENDPOINT, token_endpoint: JIRA_TOKEN_ENDPOINT }, options.clientId, undefined, oidc.ClientSecretPost(options.clientSecret)),
+		options.fetchImpl,
+	);
+}
+
+async function fetchAccessibleResources(accessToken: string, fetchImpl?: OidcFetch): Promise<AccessibleResource[]> {
+	const fetchFn = fetchImpl ?? fetch;
+	const response = await fetchFn(JIRA_ACCESSIBLE_RESOURCES_URL, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+	if (!response.ok) throw new Error(`Jira accessible-resources lookup failed: ${response.status} ${await response.text()}`);
+	return (await response.json()) as AccessibleResource[];
+}
+
+function selectAccessibleResource(resources: AccessibleResource[], site?: string): AccessibleResource {
+	if (resources.length === 0) throw new Error("Jira login succeeded but accessible-resources returned no sites — check the app's granted scopes");
+	if (resources.length === 1) return resources[0]!;
+	const match = site ? resources.find((r) => r.url.includes(site) || r.name.includes(site)) : undefined;
+	if (match) return match;
+	const names = resources.map((r) => r.url).join(", ");
+	throw new Error(`Jira login is authorized for multiple sites (${names}) — pass a site option to disambiguate`);
+}
+
+/**
+ * Authorization Code + confidential client (client_secret), matching
+ * Atlassian's documented default rather than assuming PKCE. Stores
+ * cloudId/siteUrl/clientId/clientSecret in the token's extra field: the
+ * cloudId is required for every subsequent Jira API call's URL shape, and
+ * clientId/clientSecret are required again for refresh since Jira's
+ * refresh grant is client_secret-authenticated too.
+ */
+export async function loginJiraCloud(options: JiraCloudLoginOptions): Promise<RefreshableAccessToken> {
+	const listener = options.listener ?? startJiraCallbackListener(options.callbackPort);
+	try {
+		const state = crypto.randomUUID();
+		const params = new URLSearchParams({
+			audience: "api.atlassian.com",
+			client_id: options.clientId,
+			redirect_uri: listener.redirectUri,
+			state,
+			response_type: "code",
+			prompt: "consent",
+			...(options.scope ? { scope: options.scope } : {}),
+		});
+		options.onAuthUrl(`${JIRA_AUTHORIZATION_ENDPOINT}?${params}`);
+
+		const callback = await listener.waitForCallback();
+		if ("error" in callback) throw new Error(`Jira authorization failed: ${callback.error}`);
+		if (callback.state !== state) throw new Error("Jira authorization callback state mismatch — possible CSRF, aborting");
+
+		const config = jiraConfiguration(options);
+		const callbackUrl = new URL(listener.redirectUri);
+		callbackUrl.searchParams.set("code", callback.code);
+		callbackUrl.searchParams.set("state", callback.state);
+		const tokens = await oidc.authorizationCodeGrant(config, callbackUrl, { expectedState: state });
+
+		const resources = await fetchAccessibleResources(tokens.access_token, options.fetchImpl);
+		const resource = selectAccessibleResource(resources, options.site);
+
+		return tokenFromResponse(tokens, { clientId: options.clientId, clientSecret: options.clientSecret, cloudId: resource.id, siteUrl: resource.url });
+	} finally {
+		listener.close();
+	}
 }
 
 export interface JenkinsLoginOptions {
