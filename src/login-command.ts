@@ -39,6 +39,12 @@
  *    separate accessible-resources call after the token exchange, since
  *    every subsequent Jira API call is scoped through api.atlassian.com/
  *    ex/jira/{cloudId}/..., not the site's own domain.
+ *  - Google: full OIDC discovery and a correctly-advertised device flow
+ *    (confirmed live), but its token endpoint requires a client_secret
+ *    even for device-flow clients (confirmed via its own discovery
+ *    document listing no "none" auth method) — a genuinely different
+ *    shape from GitHub/GitLab's public-client device flow despite both
+ *    using the same grant type.
  */
 import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
 import * as oidc from "openid-client";
@@ -69,8 +75,9 @@ async function runDeviceFlow(
 	scope: string | undefined,
 	onPrompt: (prompt: DeviceCodePrompt) => void,
 	extra?: Record<string, string>,
+	deviceAuthParams?: Record<string, string>,
 ): Promise<RefreshableAccessToken> {
-	const deviceResponse = await oidc.initiateDeviceAuthorization(config, scope ? { scope } : {});
+	const deviceResponse = await oidc.initiateDeviceAuthorization(config, { ...(scope ? { scope } : {}), ...deviceAuthParams });
 	onPrompt({ verificationUri: deviceResponse.verification_uri, userCode: deviceResponse.user_code });
 	const tokens = await oidc.pollDeviceAuthorizationGrant(config, deviceResponse);
 	return tokenFromResponse(tokens, extra);
@@ -181,6 +188,49 @@ export async function loginOidc(options: OidcLoginOptions): Promise<RefreshableA
 		throw new Error(`${options.issuerUrl} does not advertise a device_authorization_endpoint — this provider may not support the device grant`);
 	}
 	return runDeviceFlow(config, options.scope, options.onPrompt, { issuerUrl: options.issuerUrl, clientId: options.clientId });
+}
+
+// ── Google (Drive/Docs scopes, via device flow) ────────────────────────
+
+const GOOGLE_ISSUER = "https://accounts.google.com";
+const GOOGLE_DEFAULT_SCOPE = "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/documents";
+
+export interface GoogleLoginOptions {
+	clientId: string;
+	clientSecret: string;
+	scope?: string;
+	fetchImpl?: OidcFetch;
+	onPrompt: (prompt: DeviceCodePrompt) => void;
+}
+
+/**
+ * Google fully supports OIDC discovery and a correctly-advertised device
+ * flow (confirmed live — unlike GitLab's discovery, which reports
+ * device_authorization_endpoint as null even when supported). Unlike
+ * GitHub/GitLab's genuinely public-client device flow, Google's token
+ * endpoint only accepts confidential client auth methods (confirmed via
+ * its own discovery document's token_endpoint_auth_methods_supported,
+ * which lists no "none" option) — so a client_secret is required even
+ * for an installed-app/device-flow client. access_type=offline is passed
+ * defensively, matching Google's documented mechanism for the
+ * authorization-code flow to obtain a refresh token; unconfirmed whether
+ * device flow strictly requires it, but harmless to include.
+ */
+export async function loginGoogle(options: GoogleLoginOptions): Promise<RefreshableAccessToken> {
+	const config = await oidc.discovery(
+		new URL(GOOGLE_ISSUER),
+		options.clientId,
+		undefined,
+		oidc.ClientSecretPost(options.clientSecret),
+		options.fetchImpl ? { [oidc.customFetch]: options.fetchImpl } : undefined,
+	);
+	return runDeviceFlow(
+		config,
+		options.scope ?? GOOGLE_DEFAULT_SCOPE,
+		options.onPrompt,
+		{ issuerUrl: GOOGLE_ISSUER, clientId: options.clientId, clientSecret: options.clientSecret },
+		{ access_type: "offline" },
+	);
 }
 
 // ── Jira Cloud (OAuth 2.0 3LO) ──────────────────────────────────────────────

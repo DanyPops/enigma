@@ -95,6 +95,29 @@ function createOidcRefresh(issuerUrl: string, clientId: string, fetchImpl?: Oidc
 }
 
 /**
+ * Same shape as generic OIDC refresh but with confidential client auth —
+ * Google's token endpoint requires a client_secret even for a
+ * device-flow-obtained credential (confirmed via its own discovery
+ * document). Google's refresh tokens are persistent, not rotating, so a
+ * response omitting a new one means keep the current one, matching
+ * GitLab's pattern rather than Jira's error-on-missing pattern.
+ */
+function createConfidentialOidcRefresh(issuerUrl: string, clientId: string, clientSecret: string, fetchImpl?: OidcFetch): RefreshFn {
+	return async (current: RefreshableAccessToken): Promise<RefreshableAccessToken> => {
+		if (!current.refreshToken) throw new Error("OIDC credential has no refresh token — cannot refresh; re-run login");
+		const config = await oidc.discovery(
+			new URL(issuerUrl),
+			clientId,
+			undefined,
+			oidc.ClientSecretPost(clientSecret),
+			fetchImpl ? { [oidc.customFetch]: fetchImpl } : undefined,
+		);
+		const response = await oidc.refreshTokenGrant(config, current.refreshToken);
+		return tokenFromRefreshResponse(response, current);
+	};
+}
+
+/**
  * `undefined` means "this credential carries nothing refreshable" — GitHub
  * OAuth App tokens never expire and issue no refresh token; Jenkins is a
  * static username+API-token pair with no OAuth lifecycle at all.
@@ -102,6 +125,11 @@ function createOidcRefresh(issuerUrl: string, clientId: string, fetchImpl?: Oidc
 export function resolveRefreshFn(credential: RefreshableAccessToken, fetchImpl?: OidcFetch): RefreshFn | undefined {
 	if (credential.extra?.cloudId && credential.extra?.clientId && credential.extra?.clientSecret) {
 		return createJiraRefresh(credential.extra.clientId, credential.extra.clientSecret, fetchImpl);
+	}
+	// Checked before the plain issuerUrl+clientId branch below: a credential carrying a clientSecret
+	// (Google) must never be misrouted through the public-client path, which would omit it and fail.
+	if (credential.extra?.issuerUrl && credential.extra?.clientId && credential.extra?.clientSecret) {
+		return createConfidentialOidcRefresh(credential.extra.issuerUrl, credential.extra.clientId, credential.extra.clientSecret, fetchImpl);
 	}
 	if (credential.extra?.issuerUrl && credential.extra?.clientId) {
 		return createOidcRefresh(credential.extra.issuerUrl, credential.extra.clientId, fetchImpl);

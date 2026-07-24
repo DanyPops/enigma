@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { loginGitHub, loginGitLab, loginJenkins, loginJiraCloud, loginOidc, type JiraCallbackListener, type OidcFetch } from "../src/login-command.ts";
+import { loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc, type JiraCallbackListener, type OidcFetch } from "../src/login-command.ts";
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -261,6 +261,60 @@ describe("loginJiraCloud", () => {
 		});
 		expect(token.extra?.cloudId).toBe("cloud-2");
 		expect(token.extra?.siteUrl).toBe("https://site-two.atlassian.net");
+	});
+});
+
+describe("loginGoogle", () => {
+	function discoveryResponse() {
+		return jsonResponse({
+			issuer: "https://accounts.google.com",
+			authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+			device_authorization_endpoint: "https://oauth2.googleapis.com/device/code",
+			token_endpoint: "https://oauth2.googleapis.com/token",
+			token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
+		});
+	}
+
+	it("discovers Google's real endpoints, authenticates with client_secret even though it's a device flow, and defaults to Drive+Docs scope", async () => {
+		let deviceAuthBody: URLSearchParams | undefined;
+		let tokenAuthBody: URLSearchParams | undefined;
+		const fetchImpl: OidcFetch = async (input, init) => {
+			const url = String(input);
+			if (url === "https://accounts.google.com/.well-known/openid-configuration") return discoveryResponse();
+			if (url === "https://oauth2.googleapis.com/device/code") {
+				deviceAuthBody = new URLSearchParams(init?.body as string);
+				return jsonResponse({ device_code: "d1", user_code: "GOOG-0001", verification_uri: "https://google.com/device", expires_in: 900, interval: 1 });
+			}
+			if (url === "https://oauth2.googleapis.com/token") {
+				tokenAuthBody = new URLSearchParams(init?.body as string);
+				return jsonResponse({ access_token: "ya29.x", refresh_token: "1//refresh-x", expires_in: 3599, token_type: "Bearer" });
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		};
+		let prompted: unknown;
+		const token = await loginGoogle({ clientId: "g-client", clientSecret: "g-secret", fetchImpl, onPrompt: (p) => (prompted = p) });
+		expect(prompted).toEqual({ verificationUri: "https://google.com/device", userCode: "GOOG-0001" });
+		expect(deviceAuthBody?.get("scope")).toBe("https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/documents");
+		expect(deviceAuthBody?.get("access_type")).toBe("offline");
+		expect(tokenAuthBody?.get("client_secret")).toBe("g-secret");
+		expect(token.accessToken).toBe("ya29.x");
+		expect(token.refreshToken).toBe("1//refresh-x");
+		expect(token.extra).toEqual({ issuerUrl: "https://accounts.google.com", clientId: "g-client", clientSecret: "g-secret" });
+	});
+
+	it("accepts an operator-overridden scope instead of the Drive+Docs default", async () => {
+		let deviceAuthBody: URLSearchParams | undefined;
+		const fetchImpl: OidcFetch = async (input, init) => {
+			const url = String(input);
+			if (url === "https://accounts.google.com/.well-known/openid-configuration") return discoveryResponse();
+			if (url === "https://oauth2.googleapis.com/device/code") {
+				deviceAuthBody = new URLSearchParams(init?.body as string);
+				return jsonResponse({ device_code: "d1", user_code: "X", verification_uri: "https://google.com/device", expires_in: 900, interval: 1 });
+			}
+			return jsonResponse({ access_token: "at", expires_in: 3600, token_type: "Bearer" });
+		};
+		await loginGoogle({ clientId: "c", clientSecret: "s", scope: "openid email", fetchImpl, onPrompt: () => {} });
+		expect(deviceAuthBody?.get("scope")).toBe("openid email");
 	});
 });
 

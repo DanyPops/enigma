@@ -64,6 +64,10 @@ enigma supervisor [--config <path>]
                                   serve the vault and spawn configured daemons
 enigma login <github|gitlab|jenkins>
                                   authenticate and store credentials for a backend
+enigma login jira [--site <name-or-url>] [--scope <scope>]
+                                  Jira Cloud OAuth 2.0 (3LO), via JIRA_CLIENT_ID/JIRA_CLIENT_SECRET
+enigma login google [--scope <scope>]
+                                  Drive/Docs OAuth device flow, via GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET
 enigma login oidc --name <name> --issuer <url> --client-id <id> [--scope <scope>] [--env-var <VAR_NAME>]
                                   generic OIDC device flow for any compliant provider
 enigma rotate <backend>           force a refresh of a stored credential
@@ -145,14 +149,32 @@ human, per-instance registration step is unavoidable:
   without it the credential can't be renewed and will need a fresh login
   once the access token expires. If the app is authorized against more
   than one Jira site, pass `--site <name-or-url>` to disambiguate.
+- **Google**: register an OAuth client at
+  `console.cloud.google.com/apis/credentials` (Desktop app / TV and
+  Limited Input Devices type), enable the Drive API and Docs API for the
+  project, then set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` before
+  running `enigma login google`. Unlike GitHub/GitLab's genuinely
+  public-client device flow, Google's token endpoint requires the
+  client_secret even for device-flow clients (confirmed via its own
+  discovery document). Defaults to Drive + Docs scope; override with
+  `--scope`/`GOOGLE_SCOPES`. **A client left in "Testing" publishing
+  status (the normal case for personal use, since full verification
+  requires a Google security assessment) has refresh tokens that expire
+  after 7 days regardless of use** — without going through verification,
+  expect to re-run `enigma login google` about weekly. This is a raw
+  bearer-token model for direct REST calls to Drive/Docs
+  (`GOOGLE_ACCESS_TOKEN`), not an Application Default Credentials file —
+  it does not make a consumer daemon auto-discoverable by GCP
+  infrastructure SDKs (Cloud Storage, BigQuery, Vertex AI, etc.).
 
 GitHub's classic OAuth App device-flow tokens never expire and issue no
 refresh token (confirmed against GitHub's own docs — the example device-
 flow response has no `refresh_token` field at all; refresh is a
-GitHub-App-only feature). GitLab and Jira Cloud do issue refresh tokens —
-Jira's are rotating (each refresh invalidates the one just used and
-returns a new one), unlike GitLab's, which persist unless the server
-chooses to rotate them.
+GitHub-App-only feature). GitLab, Jira Cloud, and Google all issue refresh
+tokens — Jira's rotate (each refresh invalidates the one just used and
+returns a new one); GitLab's and Google's persist unless the server
+chooses to rotate them (Google's still expire outright after 7 days in
+Testing status, independent of rotation).
 
 ## Supervisor config
 
@@ -173,8 +195,8 @@ chooses to rotate them.
 ```
 
 Each unit's listed `backends` are resolved from the vault and injected as
-env (`GITHUB_TOKEN`, `GITLAB_TOKEN`/`GITLAB_URL`, `JIRA_TOKEN`,
-`JENKINS_API_TOKEN`/`JENKINS_USER`/`JENKINS_URL`) before spawning. Every
+env (`GITHUB_TOKEN`, `GITLAB_TOKEN`/`GITLAB_URL`, `JIRA_API_TOKEN`/`JIRA_URL`,
+`JENKINS_API_TOKEN`/`JENKINS_USER`/`JENKINS_URL`, `GOOGLE_ACCESS_TOKEN`) before spawning. Every
 other known credential env var name is explicitly blanked for that unit,
 even if ambiently present on enigma's own process — a unit only ever
 receives the credentials its own `backends` list requested, never
@@ -189,8 +211,9 @@ spawned child and waits for all of them to exit before it exits itself.
 ## Boundaries enforced
 
 - **Enigma never imports pipes/tickets/web-spider.** It knows backend
-  *names* ("github", "gitlab", "jira", "jenkins") and the generic
-  credential shape, never a consumer daemon's internal orchestration.
+  *names* ("github", "gitlab", "jira", "jenkins", "google") and the
+  generic credential shape, never a consumer daemon's internal
+  orchestration.
 - **Consumer daemons never import enigma.** They read
   `process.env.GITHUB_TOKEN` like always, and can be started standalone
   with `GITHUB_TOKEN=... bun pipes-daemon/src/cli.ts serve` for local

@@ -22,6 +22,7 @@ export const ALL_CREDENTIAL_ENV_VAR_NAMES = [
 	"GITLAB_URL",
 	"JIRA_API_TOKEN",
 	"JIRA_URL",
+	"GOOGLE_ACCESS_TOKEN",
 	"JENKINS_API_TOKEN",
 	"JENKINS_USER",
 	"JENKINS_URL",
@@ -51,6 +52,9 @@ export function mapCredentialToEnv(backend: string, token: RefreshableAccessToke
 				...(token.extra?.username ? { JENKINS_USER: token.extra.username } : {}),
 				...(token.extra?.url ? { JENKINS_URL: token.extra.url } : {}),
 			};
+		case "google":
+			// Deliberately not named after GOOGLE_APPLICATION_CREDENTIALS — this is a raw bearer token for direct REST calls (Drive/Docs APIs), not an ADC file path for SDK auto-discovery.
+			return { GOOGLE_ACCESS_TOKEN: token.accessToken };
 		default: {
 			const envVarName = token.extra?.envVarName ?? defaultEnvVarName(backend);
 			return { [envVarName]: token.accessToken };

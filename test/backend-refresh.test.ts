@@ -95,4 +95,28 @@ describe("resolveRefreshFn", () => {
 		};
 		await expect(resolveRefreshFn(credential, fetchImpl)!(credential)).rejects.toThrow(/no refresh token/);
 	});
+
+	it("resolves a confidential-client OIDC refresh (Google-shaped: issuerUrl + clientId + clientSecret) rather than misrouting it through the plain public-client generic-OIDC path", async () => {
+		const credential = { accessToken: "stale", refreshToken: "1//refresh-x", extra: { issuerUrl: "https://accounts.google.com", clientId: "g-client", clientSecret: "g-secret" } };
+		let discoveryCalled = false;
+		let tokenAuthBody: URLSearchParams | undefined;
+		const fetchImpl: OidcFetch = async (input, init) => {
+			const url = String(input);
+			if (url === "https://accounts.google.com/.well-known/openid-configuration") {
+				discoveryCalled = true;
+				return jsonResponse({ issuer: "https://accounts.google.com", token_endpoint: "https://oauth2.googleapis.com/token", token_endpoint_auth_methods_supported: ["client_secret_post"] });
+			}
+			if (url === "https://oauth2.googleapis.com/token") {
+				tokenAuthBody = new URLSearchParams(init?.body as string);
+				return jsonResponse({ access_token: "ya29.fresh", expires_in: 3599, token_type: "Bearer" });
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		};
+		const refreshed = await resolveRefreshFn(credential, fetchImpl)!(credential);
+		expect(discoveryCalled).toBe(true);
+		expect(tokenAuthBody?.get("client_secret")).toBe("g-secret");
+		expect(refreshed.accessToken).toBe("ya29.fresh");
+		// Persistent refresh tokens (Google): a response omitting a new one means keep the current one, unlike Jira's rotating tokens.
+		expect(refreshed.refreshToken).toBe("1//refresh-x");
+	});
 });

@@ -30,6 +30,10 @@ describe("mapCredentialToEnv", () => {
 		expect(mapCredentialToEnv("jira", { accessToken: "jira-x" })).toEqual({ JIRA_API_TOKEN: "jira-x" });
 	});
 
+	it("maps google to GOOGLE_ACCESS_TOKEN — deliberately not GOOGLE_APPLICATION_CREDENTIALS, since this is a raw bearer token, not an ADC file path", () => {
+		expect(mapCredentialToEnv("google", { accessToken: "ya29.x" })).toEqual({ GOOGLE_ACCESS_TOKEN: "ya29.x" });
+	});
+
 	it("maps an arbitrary/generic backend to its operator-chosen envVarName, stashed at login time", () => {
 		expect(mapCredentialToEnv("my-company-sso", { accessToken: "x", extra: { envVarName: "CUSTOM_SSO_TOKEN" } })).toEqual({ CUSTOM_SSO_TOKEN: "x" });
 	});

@@ -3,7 +3,7 @@ import { ensureAuthToken, readDaemonHandle } from "@danypops/daemon-kit/paths";
 import { connectEnigmaClient } from "./client.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import { serveMain, supervisorMain } from "./daemon.ts";
-import { loginGitHub, loginGitLab, loginJenkins, loginJiraCloud, loginOidc } from "./login-command.ts";
+import { loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc } from "./login-command.ts";
 
 const JIRA_DEFAULT_CALLBACK_PORT = 8976;
 import { defaultEnvVarName } from "./backend-env-mapping.ts";
@@ -94,6 +94,31 @@ async function loginMain(backend: string | undefined): Promise<void> {
 		return;
 	}
 
+	if (backend === "google") {
+		const clientId = process.env.GOOGLE_CLIENT_ID;
+		const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+		const scope = parseFlag(process.argv, "--scope") ?? process.env.GOOGLE_SCOPES;
+		if (!clientId || !clientSecret) {
+			console.error(
+				"GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required — register a Desktop app OAuth client at console.cloud.google.com/apis/credentials, " +
+					"and enable the Drive API and Docs API for the project. Note: a client left in \"Testing\" publishing status has refresh tokens that expire after 7 days.",
+			);
+			process.exit(1);
+		}
+		const token = await loginGoogle({
+			clientId,
+			clientSecret,
+			scope,
+			onPrompt: (p) => {
+				console.log(`Visit ${p.verificationUri} and enter code: ${p.userCode}`);
+				console.log("Waiting for authorization...");
+			},
+		});
+		vault.save("google", token);
+		console.log("Google login complete.");
+		return;
+	}
+
 	if (backend === "jira") {
 		const clientId = process.env.JIRA_CLIENT_ID;
 		const clientSecret = process.env.JIRA_CLIENT_SECRET;
@@ -135,7 +160,7 @@ async function loginMain(backend: string | undefined): Promise<void> {
 		return;
 	}
 
-	console.error("usage: enigma login <github|gitlab|jenkins|jira|oidc>");
+	console.error("usage: enigma login <github|gitlab|jenkins|jira|google|oidc>");
 	process.exit(1);
 }
 
@@ -204,6 +229,7 @@ switch (command) {
 				"  login <github|gitlab|jenkins>  authenticate and store credentials for a backend\n" +
 				"  login jira [--site <name-or-url>] [--scope <scope>]\n" +
 				"                                 Jira Cloud OAuth 2.0 (3LO), via JIRA_CLIENT_ID/JIRA_CLIENT_SECRET\n" +
+				"  login google [--scope <scope>] Drive/Docs OAuth, via GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET\n" +
 				"  login oidc --name <name> --issuer <url> --client-id <id> [--scope][--env-var]\n" +
 				"                                 generic OIDC device flow for any compliant provider\n" +
 				"  rotate <backend>               force a refresh of a stored credential\n" +
