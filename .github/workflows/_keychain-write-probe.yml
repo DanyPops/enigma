@@ -33,17 +33,13 @@ jobs:
           EOF
           bun /tmp/probe.ts
         timeout-minutes: 2
-      - name: Lock the scratch keychain, then attempt a read against it
+      - name: Lock the scratch keychain, then probe the CLI's own behavior against it
         run: |
           security lock-keychain probe.keychain
-          cat > /tmp/probe-read.ts <<'EOF'
-          import { findCredentials } from "@napi-rs/keyring";
-          console.log("before read");
-          const found = findCredentials("com.danypops.enigma.probe");
-          console.log("after read", JSON.stringify(found.map((c) => c.account)));
-          EOF
-          bun /tmp/probe-read.ts
-        timeout-minutes: 2
+          set +e
+          security find-generic-password -a master -s com.danypops.enigma.probe -w probe.keychain
+          echo "exit=$?"
+        timeout-minutes: 1
       - if: always()
         run: security delete-keychain probe.keychain || true
         timeout-minutes: 1
