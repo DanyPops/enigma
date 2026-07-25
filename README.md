@@ -245,6 +245,18 @@ returns a new one); GitLab's and Google's persist unless the server
 chooses to rotate them (Google's still expire outright after 7 days in
 Testing status, independent of rotation).
 
+## Pi extension
+
+The `secrets` slash command manages the vault from inside [pi](https://pi.dev):
+list configured backends, view redacted status (expiry/scope, never the
+token), rotate, or revoke. Enabled automatically once this package is
+installed as a pi extension (`pi.extensions` in `package.json`); talks to
+the same running `enigma serve`/`enigma supervisor` daemon the CLI does.
+Never returns `accessToken`/`refreshToken`/`extra` to the command output --
+see `extension/src/redact.ts`. Login stays CLI-only (`enigma login
+<backend>`); it's an interactive device-flow prompt, not something a slash
+command or LLM tool call can drive.
+
 ## Supervisor config
 
 `$XDG_STATE_HOME/enigma/daemons.json` (override with `--config`):
