@@ -188,35 +188,43 @@ describe("native provider selection", () => {
 });
 
 describe("real native master-key persistence", () => {
-	it("fails closed within a bounded time against a locked keychain on an isolated macOS CI runner, never hanging", () => {
-		if (process.platform !== "darwin" || process.env.ENIGMA_TEST_LOCK_DEFAULT_KEYCHAIN !== "1") return;
-		const identity = { service: `com.danypops.enigma.test.${randomUUID()}`, account: "master" };
-		const provider = createMacosKeychainMasterKeyProvider(identity);
-		const key = randomBytes(32);
-		const defaultKeychain = spawnSync("/usr/bin/security", ["default-keychain", "-d", "user"], { encoding: "utf8", timeout: 10_000 });
-		expect(defaultKeychain.status).toBe(0);
-		const path = defaultKeychain.stdout.trim().replace(/^"|"$/g, "");
-		provider.write(key);
-		try {
-			const locked = spawnSync("/usr/bin/security", ["lock-keychain", path], { encoding: "utf8", timeout: 10_000 });
-			expect(locked.status).toBe(0);
-			// Confirmed live: a locked, noninteractive-session keychain query hangs rather than
-			// fast-failing on GitHub-hosted macOS CI -- identically via `security` CLI and via
-			// @napi-rs/keyring's native binding. The read's own bounded subprocess timeout is
-			// what actually matters here: it must return "locked" or "unavailable" (both are
-			// honest given a timeout doesn't prove lock state) well within its own budget, not
-			// hang for the rest of the job.
-			const startedAt = Date.now();
-			const code = failureCode(() => provider.read());
-			expect(Date.now() - startedAt).toBeLessThan(15_000);
-			expect(code).toBeDefined();
-			expect(["locked", "unavailable"]).toContain(code as string);
-		} finally {
-			const unlocked = spawnSync("/usr/bin/security", ["unlock-keychain", "-p", "actions", path], { encoding: "utf8", timeout: 10_000 });
-			expect(unlocked.status).toBe(0);
-			new Entry(identity.service, identity.account).deletePassword();
-		}
-	});
+	it(
+		"fails closed within a bounded time against a locked keychain on an isolated macOS CI runner, never hanging",
+		() => {
+			if (process.platform !== "darwin" || process.env.ENIGMA_TEST_LOCK_DEFAULT_KEYCHAIN !== "1") return;
+			const identity = { service: `com.danypops.enigma.test.${randomUUID()}`, account: "master" };
+			const provider = createMacosKeychainMasterKeyProvider(identity);
+			const key = randomBytes(32);
+			const defaultKeychain = spawnSync("/usr/bin/security", ["default-keychain", "-d", "user"], { encoding: "utf8", timeout: 10_000 });
+			expect(defaultKeychain.status).toBe(0);
+			const path = defaultKeychain.stdout.trim().replace(/^"|"$/g, "");
+			// CI creates and owns this scratch keychain (never the real login keychain) and passes
+			// its real password through explicitly -- unlike GitHub's own login keychain, which
+			// famously accepts any password, a keychain we created ourselves does not.
+			const password = process.env.ENIGMA_TEST_KEYCHAIN_PASSWORD ?? "actions";
+			provider.write(key);
+			try {
+				const locked = spawnSync("/usr/bin/security", ["lock-keychain", path], { encoding: "utf8", timeout: 10_000 });
+				expect(locked.status).toBe(0);
+				// Confirmed live: a locked, noninteractive-session keychain query hangs rather than
+				// fast-failing on GitHub-hosted macOS CI -- identically via `security` CLI and via
+				// @napi-rs/keyring's native binding. The read's own bounded subprocess timeout is
+				// what actually matters here: it must return "locked" or "unavailable" (both are
+				// honest given a timeout doesn't prove lock state) well within its own budget, not
+				// hang for the rest of the job.
+				const startedAt = Date.now();
+				const code = failureCode(() => provider.read());
+				expect(Date.now() - startedAt).toBeLessThan(15_000);
+				expect(code).toBeDefined();
+				expect(["locked", "unavailable"]).toContain(code as string);
+			} finally {
+				const unlocked = spawnSync("/usr/bin/security", ["unlock-keychain", "-p", password, path], { encoding: "utf8", timeout: 10_000 });
+				expect(unlocked.status).toBe(0);
+				new Entry(identity.service, identity.account).deletePassword();
+			}
+		},
+		20_000,
+	);
 
 	it("persists across processes and reports a distinct missing item on macOS or Windows", () => {
 		if (process.platform !== "darwin" && process.platform !== "win32") return;

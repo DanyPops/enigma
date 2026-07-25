@@ -70,10 +70,11 @@ jobs:
       - run: bun test test/master-key.test.ts test/native-master-key.test.ts
         timeout-minutes: 5
         env:
-          # macOS-only: proves the Keychain adapter reports "locked" distinctly
-          # from "missing" against the runner's own default keychain -- now the
-          # scratch one created above, never the real login keychain.
+          # macOS-only: proves the Keychain adapter fails closed, within its own
+          # bounded timeout, against the scratch keychain created above once it's
+          # locked -- never the real login keychain, and never a hang.
           ENIGMA_TEST_LOCK_DEFAULT_KEYCHAIN: ${{ runner.os == 'macOS' && '1' || '' }}
+          ENIGMA_TEST_KEYCHAIN_PASSWORD: enigma-ci
       - name: Remove scratch macOS keychain
         if: runner.os == 'macOS' && always()
         run: security delete-keychain enigma-ci.keychain || true
