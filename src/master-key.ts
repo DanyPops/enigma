@@ -70,8 +70,7 @@ export interface NativeKeyringBindings {
 	createEntry(service: string, account: string): { setPassword(password: string): void };
 }
 
-export type MacosKeychainState = "not_found" | "locked" | "denied" | "unavailable";
-export type MacosKeychainProbe = (identity: KeyringIdentity) => MacosKeychainState;
+
 
 export interface MasterKeyManifest {
 	version: 1;
@@ -229,7 +228,7 @@ export function createSystemdCredentialMasterKeyProvider(directory: string | und
 	};
 }
 
-function classifyNativeKeyringError(kind: "macos-keychain" | "windows-credential-manager", error: unknown): MasterKeyFailure {
+function classifyNativeKeyringError(kind: "windows-credential-manager", error: unknown): MasterKeyFailure {
 	const message = error instanceof Error ? error.message.toLowerCase() : "";
 	if (message.includes("not a valid utf16") || message.includes("invalid utf")) return new MasterKeyFailure("malformed", kind);
 	if (message.includes("item not found") || message.includes("not found")) return new MasterKeyFailure("not_found", kind);
@@ -242,27 +241,75 @@ function classifyNativeKeyringError(kind: "macos-keychain" | "windows-credential
 	return new MasterKeyFailure("unavailable", kind);
 }
 
-function runMacosKeychainProbe(identity: KeyringIdentity): MacosKeychainState {
-	const result = spawnSync(MACOS_SECURITY_PATH, ["find-generic-password", "-s", identity.service, "-a", identity.account], {
-		encoding: null,
-		maxBuffer: SECRET_TOOL_MAX_OUTPUT_BYTES,
-		timeout: SECRET_TOOL_TIMEOUT_MS,
-		windowsHide: true,
-	});
-	if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return "unavailable";
-	if (result.status === 0) return "locked";
-	const stderr = Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8") : String(result.stderr ?? "");
-	if (result.status === 44 || /item (?:could not be found|not found)/i.test(stderr)) return "not_found";
-	if (/interaction.*not allowed|locked/i.test(stderr)) return "locked";
-	if (/denied|not permitted|authorization failed/i.test(stderr)) return "denied";
-	return "unavailable";
+/**
+ * Confirmed live in GitHub-hosted headless macOS CI: reading a LOCKED
+ * keychain hangs indefinitely -- not just via @napi-rs/keyring's native
+ * binding, but identically via the `security` CLI itself (a forcibly
+ * killed orphan process, confirmed in job logs). There is no session to
+ * show the interactive unlock prompt to, and unlike errSecInteractionNotAllowed's
+ * documented fast-fail, the underlying call simply blocks. A bounded
+ * subprocess (spawnSync's own `timeout`) is the only thing that reliably
+ * recovers from this -- an in-process native call has no such backstop
+ * and cannot be preempted once it blocks a syscall. Reads therefore go
+ * through `security` (bounded); writes stay on the native binding, since
+ * they only happen once at first enrollment against a store the caller
+ * just set up, and were confirmed fast (~260ms) against a real runner.
+ */
+function macosSecurityFailure(result: SecretToolResult): MasterKeyFailure {
+	if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return new MasterKeyFailure("unsupported", "macos-keychain");
+	// spawnSync's own timeout killed a hung child (status null, no signal-independent stderr to classify further):
+	// this is the locked-and-noninteractive case above. "unavailable" is the honest label -- a timeout is not
+	// positive proof of "locked" specifically, only proof that the query couldn't complete in budget.
+	if (result.status === null) return new MasterKeyFailure("unavailable", "macos-keychain");
+	const stderr = result.stderr.toString("utf8");
+	if (result.status === 44 || /could not be found in the keychain/i.test(stderr)) return new MasterKeyFailure("not_found", "macos-keychain");
+	if (/interaction.*not allowed/i.test(stderr)) return new MasterKeyFailure("locked", "macos-keychain");
+	if (/denied|not permitted|authorization/i.test(stderr)) return new MasterKeyFailure("denied", "macos-keychain");
+	return new MasterKeyFailure("unavailable", "macos-keychain");
+}
+
+export function createMacosKeychainMasterKeyProvider(
+	identity: KeyringIdentity = DEFAULT_KEYRING_IDENTITY,
+	bindings: NativeKeyringBindings = NATIVE_KEYRING_BINDINGS,
+	runner: SecretToolRunner = runSecretTool,
+): MasterKeyProvider {
+	const read = (): Buffer => {
+		const result = runner(MACOS_SECURITY_PATH, ["find-generic-password", "-a", identity.account, "-s", identity.service, "-w"], {});
+		if (result.error || result.status !== 0) throw macosSecurityFailure(result);
+		return decodeStoredKey(result.stdout.toString("utf8"), "macos-keychain");
+	};
+
+	return {
+		kind: "macos-keychain",
+		read,
+		write(key: Buffer): void {
+			assertMasterKey(key, "macos-keychain");
+			try {
+				const existing = read();
+				if (!existing.equals(key)) throw new MasterKeyFailure("conflict", "macos-keychain");
+				return;
+			} catch (error) {
+				if (!(error instanceof MasterKeyFailure) || error.code !== "not_found") throw error;
+			}
+			try {
+				bindings.createEntry(identity.service, identity.account).setPassword(key.toString("base64"));
+			} catch (error) {
+				// Native write failures still classify against message text (no `security` CLI involved here).
+				const message = error instanceof Error ? error.message.toLowerCase() : "";
+				if (message.includes("denied") || message.includes("not permitted") || message.includes("authorization failed")) {
+					throw new MasterKeyFailure("denied", "macos-keychain");
+				}
+				throw new MasterKeyFailure("unavailable", "macos-keychain");
+			}
+			if (!read().equals(key)) throw new MasterKeyFailure("corrupt", "macos-keychain");
+		},
+	};
 }
 
 function createNativeKeyringMasterKeyProvider(
-	kind: "macos-keychain" | "windows-credential-manager",
+	kind: "windows-credential-manager",
 	identity: KeyringIdentity,
 	bindings: NativeKeyringBindings,
-	missingState: () => MacosKeychainState,
 ): MasterKeyProvider {
 	const read = (): Buffer => {
 		let credentials: Array<{ account: string; password: string }>;
@@ -273,7 +320,7 @@ function createNativeKeyringMasterKeyProvider(
 		}
 		const matches = credentials.filter((credential) => credential.account === identity.account);
 		if (matches.length > 1) throw new MasterKeyFailure("ambiguous", kind);
-		if (matches.length === 0) throw new MasterKeyFailure(missingState(), kind);
+		if (matches.length === 0) throw new MasterKeyFailure("not_found", kind);
 		return decodeStoredKey(matches[0]!.password, kind);
 	};
 
@@ -299,14 +346,6 @@ function createNativeKeyringMasterKeyProvider(
 	};
 }
 
-export function createMacosKeychainMasterKeyProvider(
-	identity: KeyringIdentity = DEFAULT_KEYRING_IDENTITY,
-	bindings: NativeKeyringBindings = NATIVE_KEYRING_BINDINGS,
-	probe: MacosKeychainProbe = runMacosKeychainProbe,
-): MasterKeyProvider {
-	return createNativeKeyringMasterKeyProvider("macos-keychain", identity, bindings, () => probe(identity));
-}
-
 /**
  * Windows Credential Manager generic credentials are always scoped to the
  * current logon session (CredReadW reads "the credential set associated
@@ -321,7 +360,7 @@ export function createWindowsCredentialManagerMasterKeyProvider(
 	identity: KeyringIdentity = DEFAULT_KEYRING_IDENTITY,
 	bindings: NativeKeyringBindings = NATIVE_KEYRING_BINDINGS,
 ): MasterKeyProvider {
-	return createNativeKeyringMasterKeyProvider("windows-credential-manager", identity, bindings, () => "not_found");
+	return createNativeKeyringMasterKeyProvider("windows-credential-manager", identity, bindings);
 }
 
 export function createSecretServiceMasterKeyProvider(

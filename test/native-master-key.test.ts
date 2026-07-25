@@ -8,12 +8,44 @@ import {
 	createWindowsCredentialManagerMasterKeyProvider,
 	readMasterKeyManifest,
 	resolveMasterKey,
-	type KeyringIdentity,
 	type NativeKeyringBindings,
+	type SecretToolResult,
+	type SecretToolRunner,
 } from "../src/master-key.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+/** Models the real macOS provider's split: writes land on the native binding, reads go through a `security` CLI runner sharing the same backing store. */
+function macosFixture(): { bindings: NativeKeyringBindings & { writes: number }; runner: SecretToolRunner; calls: string[][] } {
+	const store = new Map<string, string>();
+	const calls: string[][] = [];
+	const bindings: NativeKeyringBindings & { writes: number } = {
+		writes: 0,
+		findCredentials: () => [],
+		createEntry: (service, account) => ({
+			setPassword: (password: string) => {
+				bindings.writes++;
+				store.set(`${service}\0${account}`, password);
+			},
+		}),
+	};
+	const runner: SecretToolRunner = (_command, args) => {
+		calls.push(args);
+		const service = args[args.indexOf("-s") + 1];
+		const account = args[args.indexOf("-a") + 1];
+		const password = store.get(`${service}\0${account}`);
+		if (password === undefined) {
+			return { status: 44, stdout: Buffer.alloc(0), stderr: Buffer.from("The specified item could not be found in the keychain.") };
+		}
+		return { status: 0, stdout: Buffer.from(`${password}\n`), stderr: Buffer.alloc(0) };
+	};
+	return { bindings, runner, calls };
+}
+
+function fixedRunner(result: SecretToolResult): SecretToolRunner {
+	return () => result;
+}
 
 function memoryBindings(): NativeKeyringBindings & { values: Map<string, string>; writes: number } {
 	const values = new Map<string, string>();
@@ -55,49 +87,44 @@ function resolutionPaths(root: string) {
 }
 
 describe("macOS Keychain master-key provider", () => {
-	it("persists one key through native bindings without placing it in probe arguments", () => {
-		const bindings = memoryBindings();
+	it("writes through the native binding and reads back through the bounded security CLI", () => {
+		const { bindings, runner, calls } = macosFixture();
 		const identity = { service: "test.enigma", account: "master" };
-		const probes: KeyringIdentity[] = [];
-		const probe = (candidate: KeyringIdentity) => {
-			probes.push(candidate);
-			return "not_found" as const;
-		};
-		const first = createMacosKeychainMasterKeyProvider(identity, bindings, probe);
-		const second = createMacosKeychainMasterKeyProvider(identity, bindings, probe);
+		const first = createMacosKeychainMasterKeyProvider(identity, bindings, runner);
+		const second = createMacosKeychainMasterKeyProvider(identity, bindings, runner);
 		const key = randomBytes(32);
 		first.write(key);
 		expect(second.read()).toEqual(key);
 		expect(bindings.writes).toBe(1);
-		expect(JSON.stringify(probes)).not.toContain(key.toString("base64"));
+		// find-generic-password's -w is a bare flag (prints the secret to stdout); it never
+		// carries the secret as a value, so no read call's argv can leak it either way.
+		expect(calls.some((args) => args.includes("-w"))).toBe(true);
+		expect(JSON.stringify(calls)).not.toContain(key.toString("base64"));
 	});
 
-	it("distinguishes missing, locked, denied, and unavailable state without writing", () => {
-		for (const state of ["not_found", "locked", "denied", "unavailable"] as const) {
-			const bindings = memoryBindings();
-			const provider = createMacosKeychainMasterKeyProvider({ service: "test.enigma", account: "master" }, bindings, () => state);
-			expect(failureCode(() => provider.read())).toBe(state);
-			if (state !== "not_found") {
-				expect(failureCode(() => provider.write(randomBytes(32)))).toBe(state);
+	it("distinguishes missing, locked, denied, and a bounded-timeout unavailable state from the CLI, without writing", () => {
+		const cases: Array<[SecretToolResult, string]> = [
+			[{ status: 44, stdout: Buffer.alloc(0), stderr: Buffer.from("The specified item could not be found in the keychain.") }, "not_found"],
+			[{ status: 1, stdout: Buffer.alloc(0), stderr: Buffer.from("SecKeychainItemCopyContent: User interaction is not allowed.") }, "locked"],
+			[{ status: 1, stdout: Buffer.alloc(0), stderr: Buffer.from("The authorization was denied.") }, "denied"],
+			// spawnSync's own timeout killing a hung child: status null, no stderr -- exactly what a
+			// locked-and-noninteractive keychain produces on headless macOS CI (confirmed live).
+			[{ status: null, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }, "unavailable"],
+		];
+		for (const [result, code] of cases) {
+			const { bindings, runner } = macosFixture();
+			const provider = createMacosKeychainMasterKeyProvider({ service: "test.enigma", account: "master" }, bindings, fixedRunner(result));
+			expect(failureCode(() => provider.read())).toBe(code);
+			if (code !== "not_found") {
+				expect(failureCode(() => provider.write(randomBytes(32)))).toBe(code);
 				expect(bindings.writes).toBe(0);
 			}
 		}
 	});
 
-	it("rejects duplicate and malformed native records", () => {
-		const duplicate: NativeKeyringBindings = {
-			findCredentials: () => [
-				{ account: "master", password: randomBytes(32).toString("base64") },
-				{ account: "master", password: randomBytes(32).toString("base64") },
-			],
-			createEntry: () => ({ setPassword: () => undefined }),
-		};
-		const malformed: NativeKeyringBindings = {
-			findCredentials: () => [{ account: "master", password: "not-a-key" }],
-			createEntry: () => ({ setPassword: () => undefined }),
-		};
-		expect(failureCode(() => createMacosKeychainMasterKeyProvider(undefined, duplicate, () => "not_found").read())).toBe("ambiguous");
-		expect(failureCode(() => createMacosKeychainMasterKeyProvider(undefined, malformed, () => "not_found").read())).toBe("malformed");
+	it("rejects malformed secret material returned by the CLI", () => {
+		const runner = fixedRunner({ status: 0, stdout: Buffer.from("not-a-key\n"), stderr: Buffer.alloc(0) });
+		expect(failureCode(() => createMacosKeychainMasterKeyProvider(undefined, memoryBindings(), runner).read())).toBe("malformed");
 	});
 });
 
@@ -144,11 +171,12 @@ describe("native provider selection", () => {
 		] as const) {
 			const root = mkdtempSync(join(tmpdir(), "enigma-native-resolution-"));
 			try {
-				const bindings = memoryBindings();
+				const macos = macosFixture();
+				const windowsBindings = memoryBindings();
 				const provider =
 					platform === "darwin"
-						? createMacosKeychainMasterKeyProvider(undefined, bindings, () => "not_found")
-						: createWindowsCredentialManagerMasterKeyProvider(undefined, bindings);
+						? createMacosKeychainMasterKeyProvider(undefined, macos.bindings, macos.runner)
+						: createWindowsCredentialManagerMasterKeyProvider(undefined, windowsBindings);
 				const resolved = resolveMasterKey({ ...resolutionPaths(root), platform, providers: { [kind]: provider } });
 				expect(resolved).toHaveLength(32);
 				expect(readMasterKeyManifest(join(root, "master-key.json"))?.provider).toBe(kind);
@@ -160,7 +188,7 @@ describe("native provider selection", () => {
 });
 
 describe("real native master-key persistence", () => {
-	it("reports a locked login keychain distinctly on an isolated macOS CI runner", () => {
+	it("fails closed within a bounded time against a locked keychain on an isolated macOS CI runner, never hanging", () => {
 		if (process.platform !== "darwin" || process.env.ENIGMA_TEST_LOCK_DEFAULT_KEYCHAIN !== "1") return;
 		const identity = { service: `com.danypops.enigma.test.${randomUUID()}`, account: "master" };
 		const provider = createMacosKeychainMasterKeyProvider(identity);
@@ -172,7 +200,17 @@ describe("real native master-key persistence", () => {
 		try {
 			const locked = spawnSync("/usr/bin/security", ["lock-keychain", path], { encoding: "utf8", timeout: 10_000 });
 			expect(locked.status).toBe(0);
-			expect(failureCode(() => provider.read())).toBe("locked");
+			// Confirmed live: a locked, noninteractive-session keychain query hangs rather than
+			// fast-failing on GitHub-hosted macOS CI -- identically via `security` CLI and via
+			// @napi-rs/keyring's native binding. The read's own bounded subprocess timeout is
+			// what actually matters here: it must return "locked" or "unavailable" (both are
+			// honest given a timeout doesn't prove lock state) well within its own budget, not
+			// hang for the rest of the job.
+			const startedAt = Date.now();
+			const code = failureCode(() => provider.read());
+			expect(Date.now() - startedAt).toBeLessThan(15_000);
+			expect(code).toBeDefined();
+			expect(["locked", "unavailable"]).toContain(code as string);
 		} finally {
 			const unlocked = spawnSync("/usr/bin/security", ["unlock-keychain", "-p", "actions", path], { encoding: "utf8", timeout: 10_000 });
 			expect(unlocked.status).toBe(0);
