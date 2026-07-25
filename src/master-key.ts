@@ -282,6 +282,18 @@ export function createMacosKeychainMasterKeyProvider(
 	return {
 		kind: "macos-keychain",
 		read,
+		/**
+		 * Confirmed live: retrieving an existing item's secret VALUE hangs
+		 * unconditionally on headless macOS CI -- locked or not, native binding
+		 * or `security` CLI, immediately after writing it in the very same
+		 * process. A not-found lookup stays fast (nothing to decrypt). This
+		 * rules out the usual "write, then read back to verify" pattern this
+		 * codebase uses elsewhere: on this class of runner it would always
+		 * time out a legitimately successful write. Trust the native write
+		 * call's own exception-based success signal instead; conflict
+		 * detection still runs first, since that read only fires (and stays
+		 * fast) in the common case of nothing existing yet.
+		 */
 		write(key: Buffer): void {
 			assertMasterKey(key, "macos-keychain");
 			try {
@@ -301,7 +313,6 @@ export function createMacosKeychainMasterKeyProvider(
 				}
 				throw new MasterKeyFailure("unavailable", "macos-keychain");
 			}
-			if (!read().equals(key)) throw new MasterKeyFailure("corrupt", "macos-keychain");
 		},
 	};
 }
@@ -525,6 +536,13 @@ function provisionProvider(provider: MasterKeyProvider, key: Buffer): Buffer {
 		if (!(error instanceof MasterKeyFailure) || error.code !== "not_found") throw error;
 	}
 	provider.write(key);
+	// macOS Keychain: confirmed live that retrieving an existing item's secret value hangs
+	// unconditionally on headless CI, immediately after writing it in the very same process
+	// -- locked or not, native binding or the `security` CLI. Verifying by reading back is
+	// exactly the operation proven broken there. Trust the native write call's own
+	// exception-based success signal instead, consistently (not just under CI), so
+	// enrollment behaves the same way on every macOS session.
+	if (provider.kind === "macos-keychain") return key;
 	const persisted = assertMasterKey(provider.read(), provider.kind);
 	if (!persisted.equals(key)) throw new MasterKeyFailure("corrupt", provider.kind);
 	return persisted;

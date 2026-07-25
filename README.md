@@ -47,16 +47,27 @@ Manager. Both are tied to the current user's login/logon session — a
 locked or unavailable store fails startup rather than falling back.
 
 On macOS, reads go through the `security` CLI (bounded by a 10-second
-subprocess timeout) rather than a direct native call: a locked keychain
-with no interactive session available to unlock it has been confirmed to
-hang indefinitely at the OS level, identically whether queried through the
-native Keychain Services API or `security` itself. Only a bounded
-subprocess reliably recovers from that. Enigma reports `locked` when the
-underlying error says so, and `unavailable` when the query had to be
-killed after timing out without one — both mean "try again once the
-keychain is unlocked," never a silent hang. Writes use the native binding
-directly (a plain in-memory call, so the secret never touches a command
-line), and only happen once, at first enrollment.
+subprocess timeout) rather than a direct native call: retrieving an
+existing item's secret *value* has been confirmed, on real GitHub-hosted
+macOS CI, to hang indefinitely at the OS level whenever there is no
+interactive session — identically whether queried through the native
+Keychain Services API or `security` itself, and regardless of whether the
+keychain is actually locked. Only a bounded subprocess reliably recovers
+from that; an in-process native call has no such backstop once it blocks
+inside the syscall. Enigma reports `locked` when the underlying error says
+so, and `unavailable` when the query had to be killed after timing out
+without one — both mean "try again from a session that can actually
+unlock this," never a silent hang. Writes use the native binding directly
+(a plain in-memory call, so the secret never touches a command line), are
+not verified by reading the value back afterward (the operation just
+confirmed broken in headless sessions), and only happen once, at first
+enrollment.
+
+This means the macOS Keychain provider is verified for an interactive
+desktop session — a logged-in human running `enigma login` and later
+`enigma serve` — not for unattended automation with no session at all
+(headless CI, a cron job, an SSH-only remote Mac). For that, use the file
+provider explicitly.
 
 On Windows, generic credentials are always scoped to the current user's
 logon session (`CredReadW` reads "the credential set associated with the
