@@ -3,7 +3,7 @@ import { runDaemonProcess } from "@danypops/daemon-kit/daemon";
 import { createLogger } from "@danypops/daemon-kit/logging";
 import { ensureAuthToken } from "@danypops/daemon-kit/paths";
 import { createCredentialVault, type CredentialVault } from "./credential-vault.ts";
-import { getOrCreateMasterKey, resolveKeyringIdentityFromEnv } from "./master-key.ts";
+import { resolveConfiguredMasterKey } from "./master-key.ts";
 import { resolveEnigmaExtraPaths, resolveEnigmaPaths } from "./paths.ts";
 import { createApp } from "./server.ts";
 import { loadSupervisorConfig } from "./supervisor-config.ts";
@@ -14,7 +14,7 @@ const logger = createLogger("enigma");
 function buildVault(): { vault: CredentialVault; extra: ReturnType<typeof resolveEnigmaExtraPaths> } {
 	const paths = resolveEnigmaPaths();
 	const extra = resolveEnigmaExtraPaths(paths);
-	const masterKey = getOrCreateMasterKey(extra.masterKeyFile, resolveKeyringIdentityFromEnv());
+	const masterKey = resolveConfiguredMasterKey(extra);
 	return { vault: createCredentialVault({ dir: extra.credentialsDir, masterKey }), extra };
 }
 

@@ -5,6 +5,7 @@ import {
 	DATABASE_FILENAME,
 	HANDLE_FILENAME,
 	MASTER_KEY_FILENAME,
+	MASTER_KEY_PROVIDER_FILENAME,
 	STATE_DIRECTORY_NAME,
 	SUPERVISOR_CONFIG_FILENAME,
 	SYSTEMD_UNIT_NAME,
@@ -27,15 +28,17 @@ export function resolveEnigmaPaths(options: PathEnvironment = {}): DaemonPaths {
 export interface EnigmaExtraPaths {
 	credentialsDir: string;
 	masterKeyFile: string;
+	masterKeyProviderFile: string;
 	supervisorConfig: string;
 }
 
-/** Credential dir, master-key fallback file, and supervisor config live next to auth-token in the same state directory, not under a separate root. */
+/** Provider metadata and encrypted credential state share one owner-only daemon state root. */
 export function resolveEnigmaExtraPaths(paths: DaemonPaths): EnigmaExtraPaths {
 	const stateDirectory = dirname(paths.token);
 	return {
 		credentialsDir: join(stateDirectory, CREDENTIALS_DIRECTORY_NAME),
 		masterKeyFile: join(stateDirectory, MASTER_KEY_FILENAME),
+		masterKeyProviderFile: join(stateDirectory, MASTER_KEY_PROVIDER_FILENAME),
 		supervisorConfig: join(stateDirectory, SUPERVISOR_CONFIG_FILENAME),
 	};
 }

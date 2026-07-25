@@ -7,7 +7,9 @@
  * for the spawn, the encryption, or the HTTP round-trip.
  */
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,19 +27,10 @@ interface XdgEnv {
 	XDG_DATA_HOME: string;
 	XDG_RUNTIME_DIR: string;
 	XDG_CONFIG_HOME: string;
-	ENIGMA_DISABLE_KEYRING: string;
+	ENIGMA_MASTER_KEY_PROVIDER: string;
 }
 
-/**
- * Forces the deterministic file-based master-key fallback rather than the
- * real OS keyring. Confirmed directly during development: under a fully
- * replaced (not merged) subprocess environment — no DBUS_SESSION_BUS_ADDRESS,
- * a custom XDG_RUNTIME_DIR — the real Secret Service session can't be found
- * consistently, so the keyring backend silently resolves to a different,
- * non-persistent key on every subprocess invocation. The file fallback is
- * fully under this test's control (an isolated temp dir) and has none of
- * that nondeterminism.
- */
+/** File mode is explicit so isolated subprocess tests never depend on a desktop session. */
 function xdgEnv(dir: string): XdgEnv {
 	return {
 		PATH: process.env.PATH ?? "",
@@ -45,7 +38,7 @@ function xdgEnv(dir: string): XdgEnv {
 		XDG_DATA_HOME: join(dir, "data"),
 		XDG_RUNTIME_DIR: join(dir, "run"),
 		XDG_CONFIG_HOME: join(dir, "config"),
-		ENIGMA_DISABLE_KEYRING: "1",
+		ENIGMA_MASTER_KEY_PROVIDER: "file",
 	};
 }
 
@@ -101,6 +94,28 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 		}
 	});
 
+	it("fails closed without consulting a file key when the pinned Secret Service is unavailable", async () => {
+		const dir = tmpDir();
+		try {
+			const env = { ...xdgEnv(dir), ENIGMA_MASTER_KEY_PROVIDER: "secret-service" };
+			const stateDir = join(env.XDG_STATE_HOME, "enigma");
+			mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+			const fileKey = randomBytes(32).toString("base64");
+			writeFileSync(join(stateDir, "master-key.json"), `${JSON.stringify({ version: 1, provider: "secret-service" })}\n`, { mode: 0o600 });
+			writeFileSync(join(stateDir, ".master"), `${fileKey}\n`, { mode: 0o600 });
+
+			const result = await runCli(["serve"], env);
+			expect(result.code).toBe(1);
+			expect(result.stderr).toContain("master key secret-service failure");
+			expect(result.stderr).not.toContain(fileKey);
+			expect(result.stderr).not.toContain("master-key.ts");
+			expect(readFileSync(join(stateDir, ".master"), "utf8")).toBe(`${fileKey}\n`);
+			expect(existsSync(join(env.XDG_RUNTIME_DIR, "enigma", "handle.json"))).toBe(false);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("login jenkins stores a real encrypted credential that a live daemon can then serve", async () => {
 		const dir = tmpDir();
 		let env: XdgEnv | undefined;
@@ -135,6 +150,53 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 		}
 	});
 
+	it("pins Secret Service across separate login and daemon processes when a desktop service is available", async () => {
+		const dbusAddress = process.env.DBUS_SESSION_BUS_ADDRESS;
+		if (!dbusAddress) return;
+		const probe = spawnSync("/usr/bin/secret-tool", ["lookup", "service", "__enigma_probe_missing__", "username", "master"], { maxBuffer: 4096 });
+		if (probe.error || probe.status !== 1 || probe.stderr.length !== 0) return;
+
+		const dir = tmpDir();
+		const service = `danypops.enigma.test.${randomUUID()}`;
+		const account = "master";
+		const env: XdgEnv = {
+			...xdgEnv(dir),
+			DBUS_SESSION_BUS_ADDRESS: dbusAddress,
+			ENIGMA_MASTER_KEY_PROVIDER: "secret-service",
+			ENIGMA_KEYRING_SERVICE: service,
+			ENIGMA_KEYRING_ACCOUNT: account,
+			JENKINS_URL: "https://jenkins.example.com",
+			JENKINS_USER: "fixture-user",
+			JENKINS_API_TOKEN: "fixture-token",
+		};
+		if (process.env.HOME) env.HOME = process.env.HOME;
+
+		try {
+			const login = await runCli(["login", "jenkins"], env);
+			expect(login.code).toBe(0);
+			const stateDir = join(env.XDG_STATE_HOME, "enigma");
+			expect(JSON.parse(readFileSync(join(stateDir, "master-key.json"), "utf8"))).toEqual({ version: 1, provider: "secret-service" });
+			expect(existsSync(join(stateDir, ".master"))).toBe(false);
+
+			const proc = Bun.spawn(["bun", CLI_PATH, "serve"], { env, stdout: "pipe", stderr: "pipe" });
+			try {
+				await waitFor(() => existsSync(join(env.XDG_RUNTIME_DIR, "enigma", "handle.json")));
+				const list = await runCli(["list"], env);
+				expect(list.code).toBe(0);
+				expect(JSON.parse(list.stdout)).toEqual(["jenkins"]);
+			} finally {
+				proc.kill("SIGTERM");
+				const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+				await proc.exited;
+				expect(stdout).not.toContain("fixture-token");
+				expect(stderr).not.toContain("fixture-token");
+			}
+		} finally {
+			spawnSync("/usr/bin/secret-tool", ["clear", "service", service, "username", account], { maxBuffer: 4096 });
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("supervisor spawns two configured units, each with its own credential injected as real env, and SIGTERM propagates to both children, with no raw token ever printed to enigma's own output", async () => {
 		const dir = tmpDir();
 		let env: XdgEnv | undefined;
@@ -142,18 +204,14 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 			env = { ...xdgEnv(dir), JENKINS_URL: "https://jenkins.example.com", JENKINS_USER: "bot", JENKINS_API_TOKEN: "supervised-real-tok" };
 			expect((await runCli(["login", "jenkins"], env)).code).toBe(0);
 
-			// Seed a second backend directly so this test doesn't need a live GitHub device flow
-			// just to prove two-unit spawning — the device flow itself is covered by login-command.test.ts.
-			// Uses the file-based master key directly (skipping the keyring path entirely, matching
-			// ENIGMA_DISABLE_KEYRING=1 in the subprocess env below) so this in-process write and the
-			// supervisor subprocess's read are guaranteed to resolve the identical master key.
+			// Seed a second backend without coupling this supervisor test to GitHub's device flow.
 			const { createCredentialVault } = await import("../src/credential-vault.ts");
-			const { getOrCreateMasterKeyFromFile } = await import("../src/master-key.ts");
+			const { resolveConfiguredMasterKey } = await import("../src/master-key.ts");
 			const { resolveEnigmaExtraPaths, resolveEnigmaPaths } = await import("../src/paths.ts");
 			const extra = resolveEnigmaExtraPaths(resolveEnigmaPaths({ env }));
 			createCredentialVault({
 				dir: extra.credentialsDir,
-				masterKey: getOrCreateMasterKeyFromFile(extra.masterKeyFile),
+				masterKey: resolveConfiguredMasterKey(extra, env),
 			}).save("github", { accessToken: "second-unit-real-tok" });
 
 			const logPathA = join(dir, "child-log-a.txt");

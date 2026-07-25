@@ -34,20 +34,66 @@ enigma supervisor      # serves the vault and spawns configured units
 
 ## Master key
 
-Two paths, tried in order — the key hierarchy is not a secret worth hiding:
+Enigma pins one master-key provider in
+`$XDG_STATE_HOME/enigma/master-key.json`. Provider failure stops startup;
+Enigma never falls back to another key.
 
-1. **OS keyring** (primary) — the real native keychain (Secret
-   Service/D-Bus on Linux, Keychain on macOS, Credential Manager on
-   Windows), via [`@napi-rs/keyring`](https://github.com/Brooooooklyn/keyring-node)
-   (the actively maintained NAPI binding; `node-keytar`, the older common
-   choice, was last published 2022-02-17 and is effectively abandoned).
-   Generated lazily on first use, no prompt.
-2. **File-based key** (automatic fallback) — `$XDG_STATE_HOME/enigma/.master`
-   at `0600`, for headless machines or any environment with no reachable
-   keyring backend.
+Linux desktops default to the freedesktop Secret Service. Install a Secret
+Service implementation plus `secret-tool` (`libsecret-tools` on Debian;
+`libsecret` on Fedora) and unlock the login collection before first use.
 
-A passphrase-prompted third option is explicitly out of scope — it doesn't
-fit a systemd-supervised, non-interactive process.
+macOS defaults to Keychain Services, and Windows defaults to Credential
+Manager. Both are tied to the current user's login/logon session — a
+locked or unavailable store fails startup rather than falling back.
+
+On Windows, generic credentials are always scoped to the current user's
+logon session (`CredReadW` reads "the credential set associated with the
+logon session of the current token"); Enigma never sets DPAPI's
+`CRYPTPROTECT_LOCAL_MACHINE` flag, which would let any local user decrypt
+the key. The underlying credential-store library does not expose Windows'
+`persistence` attribute, so new credentials get its own default of
+Enterprise persistence — the value roams with an Azure AD/domain-joined
+user profile's Windows credential roaming if an administrator has enabled
+it, rather than staying pinned to Local (this machine only). Most personal
+and non-domain-joined machines have credential roaming off by default. If
+your environment enables it, treat the master key as roamed with your
+user profile and scope down access accordingly.
+
+The owner-only file provider is compatibility mode and requires explicit
+opt-in:
+
+```bash
+export ENIGMA_MASTER_KEY_PROVIDER=file
+enigma login jenkins
+```
+
+This writes `$XDG_STATE_HOME/enigma/.master` at `0600`; the provider manifest
+keeps later invocations pinned to it. Existing unmarked stores are pinned
+only when one candidate key decrypts every credential record; ambiguous or
+corrupt state fails without rewriting credentials.
+
+For a fresh systemd user service, pass a raw 32-byte key as an encrypted
+systemd credential:
+
+```bash
+install -d -m 700 ~/.config/enigma
+dd if=/dev/urandom bs=32 count=1 status=none | \
+  systemd-creds --user encrypt --name=enigma-master-key - \
+  ~/.config/enigma/enigma-master-key.cred
+```
+
+Add these settings to the service:
+
+```ini
+[Service]
+LoadCredentialEncrypted=enigma-master-key:%h/.config/enigma/enigma-master-key.cred
+Environment=ENIGMA_MASTER_KEY_PROVIDER=systemd-credential
+PrivateMounts=yes
+```
+
+Do not use plaintext `SetCredential=`. Provider changes on an initialized
+store are rejected; a dedicated migration command is required before moving
+existing encrypted state to systemd credentials.
 
 ## Credential storage
 

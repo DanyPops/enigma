@@ -7,7 +7,7 @@ import { loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, lo
 
 const JIRA_DEFAULT_CALLBACK_PORT = 8976;
 import { defaultEnvVarName } from "./backend-env-mapping.ts";
-import { getOrCreateMasterKey, resolveKeyringIdentityFromEnv } from "./master-key.ts";
+import { MasterKeyFailure, resolveConfiguredMasterKey } from "./master-key.ts";
 import { resolveEnigmaExtraPaths, resolveEnigmaPaths } from "./paths.ts";
 
 const [, , command] = process.argv;
@@ -26,7 +26,7 @@ function parseFlag(argv: string[], name: string): string | undefined {
  */
 async function loginMain(backend: string | undefined): Promise<void> {
 	const extra = resolveEnigmaExtraPaths(resolveEnigmaPaths());
-	const masterKey = getOrCreateMasterKey(extra.masterKeyFile, resolveKeyringIdentityFromEnv());
+	const masterKey = resolveConfiguredMasterKey(extra);
 	const vault = createCredentialVault({ dir: extra.credentialsDir, masterKey });
 
 	if (backend === "github") {
@@ -187,55 +187,63 @@ async function listMain(): Promise<void> {
 	console.log(JSON.stringify(keys));
 }
 
-switch (command) {
-	case "serve":
-		serveMain();
-		break;
-	case "supervisor": {
-		const configFlagIndex = process.argv.indexOf("--config");
-		const configPath = configFlagIndex !== -1 ? process.argv[configFlagIndex + 1] : undefined;
-		supervisorMain(configPath);
-		break;
-	}
-	case "login":
-		await loginMain(process.argv[3]);
-		break;
-	case "rotate":
-		await rotateMain(process.argv[3]);
-		break;
-	case "revoke":
-		await revokeMain(process.argv[3]);
-		break;
-	case "list":
-		await listMain();
-		break;
-	case "health": {
-		const paths = resolveEnigmaPaths();
-		const handle = readDaemonHandle(paths.handle);
-		if (!handle) {
-			console.error("Enigma daemon is not running.");
-			process.exit(1);
+try {
+	switch (command) {
+		case "serve":
+			serveMain();
+			break;
+		case "supervisor": {
+			const configFlagIndex = process.argv.indexOf("--config");
+			const configPath = configFlagIndex !== -1 ? process.argv[configFlagIndex + 1] : undefined;
+			supervisorMain(configPath);
+			break;
 		}
-		const token = ensureAuthToken(paths.token, "Enigma");
-		const response = await fetch(`http://${handle.host}:${handle.port}/health`, { headers: { authorization: `Bearer ${token}` } });
-		console.log(await response.text());
-		break;
+		case "login":
+			await loginMain(process.argv[3]);
+			break;
+		case "rotate":
+			await rotateMain(process.argv[3]);
+			break;
+		case "revoke":
+			await revokeMain(process.argv[3]);
+			break;
+		case "list":
+			await listMain();
+			break;
+		case "health": {
+			const paths = resolveEnigmaPaths();
+			const handle = readDaemonHandle(paths.handle);
+			if (!handle) {
+				console.error("Enigma daemon is not running.");
+				process.exit(1);
+			}
+			const token = ensureAuthToken(paths.token, "Enigma");
+			const response = await fetch(`http://${handle.host}:${handle.port}/health`, { headers: { authorization: `Bearer ${token}` } });
+			console.log(await response.text());
+			break;
+		}
+		default:
+			console.error(
+				"usage: enigma <serve|supervisor|login|rotate|revoke|list|health>\n" +
+					"  serve                          serve the vault only, no supervision\n" +
+					"  supervisor [--config <path>]   serve the vault and spawn configured daemons\n" +
+					"  login <github|gitlab|jenkins>  authenticate and store credentials for a backend\n" +
+					"  login jira [--site <name-or-url>] [--scope <scope>]\n" +
+					"                                 Jira Cloud OAuth 2.0 (3LO), via JIRA_CLIENT_ID/JIRA_CLIENT_SECRET\n" +
+					"  login google [--scope <scope>] Drive/Docs OAuth, via GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET\n" +
+					"  login oidc --name <name> --issuer <url> --client-id <id> [--scope][--env-var]\n" +
+					"                                 generic OIDC device flow for any compliant provider\n" +
+					"  rotate <backend>               force a refresh of a stored credential\n" +
+					"  revoke <backend>               delete a stored credential\n" +
+					"  list                           list backends with a stored credential\n" +
+					"  health                         talk to a running instance, print status JSON",
+			);
+			process.exit(1);
 	}
-	default:
-		console.error(
-			"usage: enigma <serve|supervisor|login|rotate|revoke|list|health>\n" +
-				"  serve                          serve the vault only, no supervision\n" +
-				"  supervisor [--config <path>]   serve the vault and spawn configured daemons\n" +
-				"  login <github|gitlab|jenkins>  authenticate and store credentials for a backend\n" +
-				"  login jira [--site <name-or-url>] [--scope <scope>]\n" +
-				"                                 Jira Cloud OAuth 2.0 (3LO), via JIRA_CLIENT_ID/JIRA_CLIENT_SECRET\n" +
-				"  login google [--scope <scope>] Drive/Docs OAuth, via GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET\n" +
-				"  login oidc --name <name> --issuer <url> --client-id <id> [--scope][--env-var]\n" +
-				"                                 generic OIDC device flow for any compliant provider\n" +
-				"  rotate <backend>               force a refresh of a stored credential\n" +
-				"  revoke <backend>               delete a stored credential\n" +
-				"  list                           list backends with a stored credential\n" +
-				"  health                         talk to a running instance, print status JSON",
-		);
+} catch (error) {
+	if (error instanceof MasterKeyFailure) {
+		console.error(error.message);
 		process.exit(1);
+	}
+	throw error;
 }
