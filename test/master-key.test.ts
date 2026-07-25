@@ -56,7 +56,9 @@ describe("file master-key provider", () => {
 			const key = randomBytes(32);
 			provider.write(key);
 			expect(provider.read()).toEqual(key);
-			expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
+			// Windows has no POSIX permission bits; ownership isolation there comes
+			// from the per-user profile ACL on the containing directory instead.
+			if (process.platform !== "win32") expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
 			expect(() => provider.write(randomBytes(32))).toThrow(MasterKeyFailure);
 			expect(provider.read()).toEqual(key);
 		} finally {
@@ -89,7 +91,7 @@ describe("master-key resolution", () => {
 			expect(file.reads + file.writes).toBe(0);
 			expect(readMasterKeyManifest(extra.manifestPath)).toEqual({ version: 1, provider: "secret-service" });
 			expect(readFileSync(extra.manifestPath, "utf8")).not.toContain(key.toString("base64"));
-			expect((statSync(extra.manifestPath).mode & 0o777).toString(8)).toBe("600");
+			if (process.platform !== "win32") expect((statSync(extra.manifestPath).mode & 0o777).toString(8)).toBe("600");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -272,7 +274,9 @@ describe("legacy provider migration", () => {
 	});
 });
 
-describe("systemd credential master-key provider", () => {
+// systemd credentials are a Linux-only OS mechanism; the writable/symlink
+// checks below rely on POSIX mode bits that Windows and macOS don't share.
+describe.skipIf(process.platform !== "linux")("systemd credential master-key provider", () => {
 	it("reads one raw 32-byte credential from an absolute systemd directory", () => {
 		const dir = tmpDir();
 		try {
