@@ -18,6 +18,7 @@ import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-age
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import type { VaultClient } from "@danypops/daemon-kit/vault";
 import { defaultEnvVarName } from "../../src/backend-env-mapping.ts";
+import { type BrowserOpener, openInBrowser } from "../../src/browser-launcher.ts";
 import { connectEnigmaClient } from "../../src/client.ts";
 import { createCredentialVault, type CredentialVault } from "../../src/credential-vault.ts";
 import {
@@ -143,6 +144,7 @@ async function loginBackendFlow(
 	buildVault: () => CredentialVault = buildLocalVault,
 	pick: PickFromList = pickFromList,
 	loginFns: LoginFns = defaultLoginFns,
+	browserOpener?: BrowserOpener,
 ): Promise<void> {
 	const kindItems: SelectItem[] = [
 		{ value: "github", label: "github", description: "Device flow \u2014 requires GITHUB_CLIENT_ID" },
@@ -161,8 +163,18 @@ async function loginBackendFlow(
 		return;
 	}
 
-	const onPrompt = (prompt: DeviceCodePrompt) => ctx.ui.notify(`Visit ${prompt.verificationUri} and enter code: ${prompt.userCode}`, "info");
-	const onAuthUrl = (url: string) => ctx.ui.notify(`Visit this URL to authorize: ${url}`, "info");
+	const onPrompt = (prompt: DeviceCodePrompt) => {
+		ctx.ui.notify(`Visit ${prompt.verificationUri} and enter code: ${prompt.userCode}`, "info");
+		void openInBrowser(prompt.verificationUri, browserOpener).then((opened) => {
+			if (!opened) ctx.ui.notify("Could not open a browser automatically \u2014 open the URL above manually.", "warning");
+		});
+	};
+	const onAuthUrl = (url: string) => {
+		ctx.ui.notify(`Visit this URL to authorize: ${url}`, "info");
+		void openInBrowser(url, browserOpener).then((opened) => {
+			if (!opened) ctx.ui.notify("Could not open a browser automatically \u2014 open the URL above manually.", "warning");
+		});
+	};
 
 	try {
 		if (kind === "github") {
@@ -252,6 +264,7 @@ export async function runSecretsCommand(
 	pick: PickFromList = pickFromList,
 	buildVault: () => CredentialVault = buildLocalVault,
 	loginFns: LoginFns = defaultLoginFns,
+	browserOpener?: BrowserOpener,
 ): Promise<void> {
 	let client: VaultClient;
 	try {
@@ -286,7 +299,7 @@ export async function runSecretsCommand(
 		if (!selected) return;
 
 		if (selected === LOGIN_ACTION) {
-			await loginBackendFlow(ctx, buildVault, pick, loginFns);
+			await loginBackendFlow(ctx, buildVault, pick, loginFns, browserOpener);
 			continue;
 		}
 

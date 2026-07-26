@@ -145,6 +145,15 @@ enigma list                       list backends with a stored credential
 enigma health                     talk to a running instance, print status JSON
 ```
 
+Every device-flow or auth-code login (github, gitlab, google, oidc, jira)
+always prints the verification URL/code, and also best-effort opens it in
+your default browser (via `open` -- `open` on macOS, `start` on Windows,
+`xdg-open` elsewhere). If no browser is reachable (headless session, no
+display, nothing installed to open it), it says so and falls back to the
+printed URL -- login itself never fails just because the browser didn't
+open. Works the same way from `/secrets`' "Log in a backend" flow inside
+pi.
+
 All OAuth/OIDC mechanics (discovery, device-flow polling, refresh) run
 through [`openid-client`](https://github.com/panva/openid-client) (OpenID
 Certified — Basic, FAPI 1.0, FAPI 2.0), not hand-rolled protocol code.

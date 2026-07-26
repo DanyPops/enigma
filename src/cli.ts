@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { ensureAuthToken, readDaemonHandle } from "@danypops/daemon-kit/paths";
+import { openInBrowser } from "./browser-launcher.ts";
 import { connectEnigmaClient } from "./client.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import { serveMain, supervisorMain } from "./daemon.ts";
@@ -41,6 +42,9 @@ async function loginMain(backend: string | undefined): Promise<void> {
 			onPrompt: (p) => {
 				console.log(`Visit ${p.verificationUri} and enter code: ${p.userCode}`);
 				console.log("Waiting for authorization...");
+				void openInBrowser(p.verificationUri).then((opened) => {
+					if (!opened) console.log("Could not open a browser automatically -- open the URL above manually.");
+				});
 			},
 		});
 		vault.save("github", token);
@@ -62,6 +66,9 @@ async function loginMain(backend: string | undefined): Promise<void> {
 			onPrompt: (p) => {
 				console.log(`Visit ${p.verificationUri} and enter code: ${p.userCode}`);
 				console.log("Waiting for authorization...");
+				void openInBrowser(p.verificationUri).then((opened) => {
+					if (!opened) console.log("Could not open a browser automatically -- open the URL above manually.");
+				});
 			},
 		});
 		vault.save("gitlab", token);
@@ -86,6 +93,9 @@ async function loginMain(backend: string | undefined): Promise<void> {
 			onPrompt: (p) => {
 				console.log(`Visit ${p.verificationUri} and enter code: ${p.userCode}`);
 				console.log("Waiting for authorization...");
+				void openInBrowser(p.verificationUri).then((opened) => {
+					if (!opened) console.log("Could not open a browser automatically -- open the URL above manually.");
+				});
 			},
 		});
 		token.extra = { ...token.extra, envVarName: envVar ?? defaultEnvVarName(name) };
@@ -112,6 +122,9 @@ async function loginMain(backend: string | undefined): Promise<void> {
 			onPrompt: (p) => {
 				console.log(`Visit ${p.verificationUri} and enter code: ${p.userCode}`);
 				console.log("Waiting for authorization...");
+				void openInBrowser(p.verificationUri).then((opened) => {
+					if (!opened) console.log("Could not open a browser automatically -- open the URL above manually.");
+				});
 			},
 		});
 		vault.save("google", token);
@@ -142,6 +155,9 @@ async function loginMain(backend: string | undefined): Promise<void> {
 			onAuthUrl: (url) => {
 				console.log(`Visit this URL to authorize: ${url}`);
 				console.log("Waiting for the callback...");
+				void openInBrowser(url).then((opened) => {
+					if (!opened) console.log("Could not open a browser automatically -- open the URL above manually.");
+				});
 			},
 		});
 		vault.save("jira", token);

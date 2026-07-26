@@ -69,6 +69,18 @@ function fakeVault(): CredentialVault & { saved: Array<{ backend: string; token:
 	};
 }
 
+/** Never actually launches anything; records what it was asked to open. */
+function fakeBrowserOpener(succeeds = true): { open: (url: string) => Promise<unknown>; opened: string[] } {
+	const opened: string[] = [];
+	return {
+		opened,
+		open: async (url: string) => {
+			opened.push(url);
+			if (!succeeds) throw new Error("no browser available");
+		},
+	};
+}
+
 function fakeLoginFns(overrides: Partial<LoginFns> = {}): LoginFns & { calls: Record<string, unknown[]> } {
 	const calls: Record<string, unknown[]> = { loginGitHub: [], loginGitLab: [], loginGoogle: [], loginJenkins: [], loginJiraCloud: [], loginOidc: [] };
 	return {
@@ -210,21 +222,42 @@ describe("runSecretsCommand", () => {
 });
 
 describe("runSecretsCommand > login", () => {
-	it("logs in a device-flow backend (github), relays the code, and saves the token without ever exposing it", async () => {
+	it("logs in a device-flow backend (github), relays the code, opens a browser to the verification URL, and saves the token without ever exposing it", async () => {
 		const { ctx, notifications } = fakeCtx();
 		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
+		const browser = fakeBrowserOpener();
 		process.env.GITHUB_CLIENT_ID = "fixture-client-id";
 		try {
-			await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "github", null), () => vault, loginFns);
+			await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "github", null), () => vault, loginFns, browser.open);
 		} finally {
 			delete process.env.GITHUB_CLIENT_ID;
 		}
 		expect(vault.saved).toEqual([{ backend: "github", token: { accessToken: FIXTURE_OAUTH_TOKEN } }]);
 		expect(notifications.some((n) => n.text.includes("ABCD-1234"))).toBe(true);
 		expect(notifications.some((n) => n.text === "GitHub login complete.")).toBe(true);
+		expect(browser.opened).toEqual(["https://github.com/login/device"]);
 		expect(JSON.stringify(notifications)).not.toContain(FIXTURE_OAUTH_TOKEN);
+	});
+
+	it("never fails a login just because the browser couldn't be opened, and says so", async () => {
+		const { ctx, notifications } = fakeCtx();
+		const client = fakeVaultClient({});
+		const vault = fakeVault();
+		const loginFns = fakeLoginFns();
+		const browser = fakeBrowserOpener(false);
+		process.env.GITHUB_CLIENT_ID = "fixture-client-id";
+		try {
+			await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "github", null), () => vault, loginFns, browser.open);
+			// The browser-open failure is reported asynchronously (fire-and-forget); give it a tick.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		} finally {
+			delete process.env.GITHUB_CLIENT_ID;
+		}
+		expect(vault.saved).toEqual([{ backend: "github", token: { accessToken: FIXTURE_OAUTH_TOKEN } }]);
+		expect(notifications.some((n) => n.text === "GitHub login complete.")).toBe(true);
+		expect(notifications.some((n) => n.level === "warning" && n.text.includes("open the URL above manually"))).toBe(true);
 	});
 
 	it("refuses to log in a backend when its required env vars are missing, without calling the login function", async () => {
@@ -266,7 +299,7 @@ describe("runSecretsCommand > login", () => {
 		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
-		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "oidc", null), () => vault, loginFns);
+		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "oidc", null), () => vault, loginFns, fakeBrowserOpener().open);
 		expect(inputPrompts).toEqual(["Backend name", "Issuer URL", "Client ID", "Scope (optional)", "Env var name (optional)"]);
 		expect(vault.saved).toEqual([{ backend: "my-company-sso", token: { accessToken: FIXTURE_OAUTH_TOKEN, extra: { envVarName: "MY_COMPANY_SSO_TOKEN" } } }]);
 		expect(notifications.some((n) => n.text.includes("OIDC-9999"))).toBe(true);
