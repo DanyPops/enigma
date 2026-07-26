@@ -37,10 +37,6 @@ jobs:
       # Trusted publishing needs npm >= 11.5.1; Node's bundled npm can be older.
       - run: npm install -g npm@latest && npm --version
 
-      # Disposable diagnostic: confirms only whether the OIDC token exchange itself
-      # succeeds or the exact reason it's rejected -- never prints the token/secret.
-      - run: npm publish --dry-run --loglevel silly 2>&1 | grep -i "oidc" | sed -E 's/(token|secret)[^ ]*/\1=REDACTED/I'
-
       # --provenance is documented as automatic under trusted publishing, but is
       # confirmed (npm/cli#8730) to be needed explicitly in practice for the OIDC
       # exchange to actually trigger -- without it npm CLI falls back to ENEEDAUTH.
