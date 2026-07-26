@@ -37,10 +37,18 @@ jobs:
       # Trusted publishing needs npm >= 11.5.1; Node's bundled npm can be older.
       - run: npm install -g npm@latest && npm --version
 
-      # Disposable diagnostic: presence only, never prints the token value itself.
+      # Disposable diagnostic: presence only, never prints token/secret values themselves.
       - run: |
           if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then echo "ACTIONS_ID_TOKEN_REQUEST_URL is set"; else echo "ACTIONS_ID_TOKEN_REQUEST_URL is EMPTY"; fi
           if [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN is set"; else echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN is EMPTY"; fi
+          echo "--- .npmrc files (paths + redacted content) ---"
+          for f in ~/.npmrc ./.npmrc /etc/npmrc; do
+            if [ -f "$f" ]; then echo "$f exists:"; sed -E 's/(_authToken|_password|_auth)=.*/\1=REDACTED/' "$f"; else echo "$f absent"; fi
+          done
+          echo "--- npm config list -l (may include redacted auth-shaped keys) ---"
+          npm config list -l | sed -E 's/(_authToken|_password|_auth)=.*/\1=REDACTED/'
+          echo "--- npm publish --dry-run --loglevel silly, filtered for oidc/trusted/actions/auth ---"
+          npm publish --dry-run --loglevel silly 2>&1 | grep -iE "oidc|trusted|actions_id|auth" | sed -E 's/(token|secret)[^ ]*/\1=REDACTED/I' | tail -80
 
       # --provenance is documented as automatic under trusted publishing, but is
       # confirmed (npm/cli#8730) to be needed explicitly in practice for the OIDC
