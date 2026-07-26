@@ -37,6 +37,11 @@ jobs:
       # Trusted publishing needs npm >= 11.5.1; Node's bundled npm can be older.
       - run: npm install -g npm@latest && npm --version
 
+      # Disposable diagnostic: presence only, never prints the token value itself.
+      - run: |
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then echo "ACTIONS_ID_TOKEN_REQUEST_URL is set"; else echo "ACTIONS_ID_TOKEN_REQUEST_URL is EMPTY"; fi
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN is set"; else echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN is EMPTY"; fi
+
       # --provenance is documented as automatic under trusted publishing, but is
       # confirmed (npm/cli#8730) to be needed explicitly in practice for the OIDC
       # exchange to actually trigger -- without it npm CLI falls back to ENEEDAUTH.
