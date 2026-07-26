@@ -150,6 +150,101 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 		}
 	});
 
+	it("login --as stores a second account for the same platform independently, under a distinct alias", async () => {
+		const dir = tmpDir();
+		let env: XdgEnv | undefined;
+		try {
+			env = { ...xdgEnv(dir), JENKINS_URL: "https://jenkins.example.com", JENKINS_USER: "bot", JENKINS_API_TOKEN: "first-account-tok" };
+			const first = await runCli(["login", "jenkins"], env);
+			expect(first.code).toBe(0);
+			expect(first.stdout).toContain("Jenkins credentials saved.");
+
+			const secondEnv = { ...env, JENKINS_URL: "https://staging.jenkins.example.com", JENKINS_USER: "staging-bot", JENKINS_API_TOKEN: "second-account-tok" };
+			const second = await runCli(["login", "jenkins", "--as", "jenkins-staging"], secondEnv);
+			expect(second.code).toBe(0);
+			expect(second.stdout).toContain('Jenkins credentials saved (stored as "jenkins-staging").');
+
+			const credentialsDir = join(env.XDG_STATE_HOME, "enigma", "credentials");
+			expect(existsSync(join(credentialsDir, "jenkins.json"))).toBe(true);
+			expect(existsSync(join(credentialsDir, "jenkins-staging.json"))).toBe(true);
+			// Neither login overwrote the other -- both encrypted files exist distinctly, and neither
+			// stores the other account's real token (encrypted at rest either way).
+			const firstOnDisk = readFileSync(join(credentialsDir, "jenkins.json"), "utf8");
+			const secondOnDisk = readFileSync(join(credentialsDir, "jenkins-staging.json"), "utf8");
+			expect(firstOnDisk).not.toContain("first-account-tok");
+			expect(firstOnDisk).not.toContain("second-account-tok");
+			expect(secondOnDisk).not.toContain("second-account-tok");
+			expect(secondOnDisk).not.toContain("first-account-tok");
+
+			const proc = Bun.spawn(["bun", CLI_PATH, "serve"], { env, stdout: "ignore", stderr: "pipe" });
+			try {
+				await waitFor(() => existsSync(join(env!.XDG_RUNTIME_DIR, "enigma", "handle.json")));
+				const list = await runCli(["list"], env);
+				expect(JSON.parse(list.stdout).sort()).toEqual(["jenkins", "jenkins-staging"]);
+			} finally {
+				proc.kill("SIGTERM");
+				await proc.exited;
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("a supervised unit resolves an aliased backend under its derived prefix, with no leakage to a sibling unit using the literal (unaliased) account", async () => {
+		const dir = tmpDir();
+		let env: XdgEnv | undefined;
+		try {
+			env = { ...xdgEnv(dir), JENKINS_URL: "https://jenkins.example.com", JENKINS_USER: "bot", JENKINS_API_TOKEN: "literal-tok" };
+			expect((await runCli(["login", "jenkins"], env)).code).toBe(0);
+			const stagingEnv = { ...env, JENKINS_URL: "https://staging.jenkins.example.com", JENKINS_USER: "staging-bot", JENKINS_API_TOKEN: "aliased-tok" };
+			expect((await runCli(["login", "jenkins", "--as", "jenkins-staging"], stagingEnv)).code).toBe(0);
+
+			const logPathLiteral = join(dir, "child-log-literal.txt");
+			const logPathAliased = join(dir, "child-log-aliased.txt");
+			const configPath = join(dir, "daemons.json");
+			writeFileSync(
+				configPath,
+				JSON.stringify({
+					units: [
+						{ name: "unit-literal", bin: "bun", args: [FIXTURE, logPathLiteral], backends: ["jenkins"], restart: "no" },
+						{ name: "unit-aliased", bin: "bun", args: [FIXTURE, logPathAliased], backends: ["jenkins-staging"], restart: "no" },
+					],
+				}),
+			);
+
+			const proc = Bun.spawn(["bun", CLI_PATH, "supervisor", "--config", configPath], { env, stdout: "pipe", stderr: "pipe" });
+			try {
+				await waitFor(() => readLog(logPathLiteral).some((l) => l.startsWith("start:")) && readLog(logPathAliased).some((l) => l.startsWith("start:")));
+				const lineLiteral = readLog(logPathLiteral).find((l) => l.startsWith("start:")) ?? "";
+				const lineAliased = readLog(logPathAliased).find((l) => l.startsWith("start:")) ?? "";
+
+				// The literal (unaliased) unit gets the plain names and its own token, never the aliased account's.
+				expect(lineLiteral).toContain(`"JENKINS_API_TOKEN":"literal-tok"`);
+				expect(lineLiteral).toContain(`"JENKINS_USER":"bot"`);
+				expect(lineLiteral).not.toContain("aliased-tok");
+				expect(lineLiteral).toContain(`"JENKINS_STAGING_API_TOKEN":""`); // scrubbed: this unit never requested it
+
+				// The aliased unit gets the derived-prefix names and its own token, never the literal account's.
+				expect(lineAliased).toContain(`"JENKINS_STAGING_API_TOKEN":"aliased-tok"`);
+				expect(lineAliased).toContain(`"JENKINS_STAGING_USER":"staging-bot"`);
+				expect(lineAliased).toContain(`"JENKINS_STAGING_URL":"https://staging.jenkins.example.com"`);
+				expect(lineAliased).not.toContain("literal-tok");
+				expect(lineAliased).toContain(`"JENKINS_API_TOKEN":""`); // scrubbed: this unit never requested the literal account
+			} finally {
+				proc.kill("SIGTERM");
+				const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+				await proc.exited;
+				await waitFor(() => readLog(logPathLiteral).includes("sigterm") && readLog(logPathAliased).includes("sigterm"));
+				expect(stdout).not.toContain("literal-tok");
+				expect(stdout).not.toContain("aliased-tok");
+				expect(stderr).not.toContain("literal-tok");
+				expect(stderr).not.toContain("aliased-tok");
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("pins Secret Service across separate login and daemon processes when a desktop service is available", async () => {
 		const dbusAddress = process.env.DBUS_SESSION_BUS_ADDRESS;
 		if (!dbusAddress) return;

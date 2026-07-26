@@ -139,6 +139,12 @@ function notifyMissingEnv(ctx: ExtensionCommandContext, vars: string, guidance: 
 	ctx.ui.notify(`${vars} required \u2014 ${guidance}.`, "error");
 }
 
+/** Lets a second account for the same platform (`enigma login github --as work`'s TUI equivalent) be stored distinctly, defaulting to the platform's literal name. */
+async function promptAlias(ctx: ExtensionCommandContext, literalName: string): Promise<string> {
+	const alias = await ctx.ui.input("Save as (optional, for a second account)", literalName);
+	return alias || literalName;
+}
+
 async function loginBackendFlow(
 	ctx: ExtensionCommandContext,
 	buildVault: () => CredentialVault = buildLocalVault,
@@ -180,9 +186,10 @@ async function loginBackendFlow(
 		if (kind === "github") {
 			const clientId = process.env.GITHUB_CLIENT_ID;
 			if (!clientId) return notifyMissingEnv(ctx, "GITHUB_CLIENT_ID", "register a personal OAuth App with Device Flow enabled at github.com/settings/developers");
+			const alias = await promptAlias(ctx, "github");
 			const token = await loginFns.loginGitHub({ clientId, scope: process.env.GITHUB_SCOPES, onPrompt });
-			buildVault().save("github", token);
-			ctx.ui.notify("GitHub login complete.", "info");
+			buildVault().save(alias, token);
+			ctx.ui.notify(alias === "github" ? "GitHub login complete." : `GitHub login complete (stored as "${alias}").`, "info");
 			return;
 		}
 
@@ -190,9 +197,10 @@ async function loginBackendFlow(
 			const baseUrl = process.env.GITLAB_URL;
 			const clientId = process.env.GITLAB_CLIENT_ID;
 			if (!baseUrl || !clientId) return notifyMissingEnv(ctx, "GITLAB_URL and GITLAB_CLIENT_ID", "register a personal Application under your GitLab instance's User Settings > Applications");
+			const alias = await promptAlias(ctx, "gitlab");
 			const token = await loginFns.loginGitLab({ baseUrl, clientId, scope: process.env.GITLAB_SCOPES, onPrompt });
-			buildVault().save("gitlab", token);
-			ctx.ui.notify("GitLab login complete.", "info");
+			buildVault().save(alias, token);
+			ctx.ui.notify(alias === "gitlab" ? "GitLab login complete." : `GitLab login complete (stored as "${alias}").`, "info");
 			return;
 		}
 
@@ -206,9 +214,10 @@ async function loginBackendFlow(
 					"register a Desktop app OAuth client at console.cloud.google.com/apis/credentials, and enable the Drive API and Docs API",
 				);
 			}
+			const alias = await promptAlias(ctx, "google");
 			const token = await loginFns.loginGoogle({ clientId, clientSecret, scope: process.env.GOOGLE_SCOPES, onPrompt });
-			buildVault().save("google", token);
-			ctx.ui.notify("Google login complete.", "info");
+			buildVault().save(alias, token);
+			ctx.ui.notify(alias === "google" ? "Google login complete." : `Google login complete (stored as "${alias}").`, "info");
 			return;
 		}
 
@@ -223,18 +232,20 @@ async function loginBackendFlow(
 					`register an OAuth 2.0 (3LO) app at developer.atlassian.com/console/myapps with Callback URL http://127.0.0.1:${callbackPort}/callback`,
 				);
 			}
+			const alias = await promptAlias(ctx, "jira");
 			const site = (await ctx.ui.input("Jira site (optional)", "leave blank unless authorized for multiple sites")) || undefined;
 			const token = await loginFns.loginJiraCloud({ clientId, clientSecret, scope: process.env.JIRA_SCOPES, callbackPort, site, onAuthUrl });
-			buildVault().save("jira", token);
-			ctx.ui.notify("Jira login complete.", "info");
+			buildVault().save(alias, token);
+			ctx.ui.notify(alias === "jira" ? "Jira login complete." : `Jira login complete (stored as "${alias}").`, "info");
 			return;
 		}
 
 		if (kind === "jenkins") {
 			const { JENKINS_URL: url, JENKINS_USER: username, JENKINS_API_TOKEN: apiToken } = process.env;
 			if (!url || !username || !apiToken) return notifyMissingEnv(ctx, "JENKINS_URL, JENKINS_USER, and JENKINS_API_TOKEN", "generate an API token from your Jenkins user's Configure page");
-			buildVault().save("jenkins", loginFns.loginJenkins({ url, username, apiToken }));
-			ctx.ui.notify("Jenkins credentials saved.", "info");
+			const alias = await promptAlias(ctx, "jenkins");
+			buildVault().save(alias, loginFns.loginJenkins({ url, username, apiToken }));
+			ctx.ui.notify(alias === "jenkins" ? "Jenkins credentials saved." : `Jenkins credentials saved (stored as "${alias}").`, "info");
 			return;
 		}
 

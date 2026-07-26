@@ -131,11 +131,11 @@ decryption throws rather than silently returning garbage.
 enigma serve                     serve the vault only, no supervision
 enigma supervisor [--config <path>]
                                   serve the vault and spawn configured daemons
-enigma login <github|gitlab|jenkins>
+enigma login <github|gitlab|jenkins> [--as <alias>]
                                   authenticate and store credentials for a backend
-enigma login jira [--site <name-or-url>] [--scope <scope>]
+enigma login jira [--site <name-or-url>] [--scope <scope>] [--as <alias>]
                                   Jira Cloud OAuth 2.0 (3LO), via JIRA_CLIENT_ID/JIRA_CLIENT_SECRET
-enigma login google [--scope <scope>]
+enigma login google [--scope <scope>] [--as <alias>]
                                   Drive/Docs OAuth device flow, via GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET
 enigma login oidc --name <name> --issuer <url> --client-id <id> [--scope <scope>] [--env-var <VAR_NAME>]
                                   generic OIDC device flow for any compliant provider
@@ -144,6 +144,26 @@ enigma revoke <backend>           delete a stored credential
 enigma list                       list backends with a stored credential
 enigma health                     talk to a running instance, print status JSON
 ```
+
+### Multiple accounts on the same platform
+
+`--as <alias>` stores the credential under `<alias>` instead of the
+platform's literal name, so a second account never overwrites the first:
+
+```bash
+enigma login github                    # stored as "github" -> GITHUB_TOKEN
+enigma login github --as github-work   # stored as "github-work" -> GITHUB_WORK_TOKEN
+```
+
+A unit's `daemons.json` `backends` list then names whichever account it
+wants (`"backends": ["github-work"]`), and gets that account's token
+injected under the derived prefix -- `{ALIAS}_TOKEN` for GitHub/GitLab,
+`{ALIAS}_API_TOKEN`/`{ALIAS}_URL`/`{ALIAS}_USER` for Jira/Jenkins,
+`{ALIAS}_ACCESS_TOKEN` for Google -- matching each platform's own var-name
+convention under the literal name, just prefixed by the alias instead.
+Rotation and refresh work identically for an aliased account; only the
+vault key and the injected variable names change. `/secrets`' "Log in a
+backend" flow offers the same optional "Save as" prompt.
 
 Every device-flow or auth-code login (github, gitlab, google, oidc, jira)
 always prints the verification URL/code, and also best-effort opens it in

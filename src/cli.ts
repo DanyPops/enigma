@@ -30,6 +30,8 @@ async function loginMain(backend: string | undefined): Promise<void> {
 	const masterKey = resolveConfiguredMasterKey(extra);
 	const vault = createCredentialVault({ dir: extra.credentialsDir, masterKey });
 
+	const alias = parseFlag(process.argv, "--as");
+
 	if (backend === "github") {
 		const clientId = process.env.GITHUB_CLIENT_ID;
 		if (!clientId) {
@@ -47,8 +49,8 @@ async function loginMain(backend: string | undefined): Promise<void> {
 				});
 			},
 		});
-		vault.save("github", token);
-		console.log("GitHub login complete.");
+		vault.save(alias ?? "github", token);
+		console.log(alias ? `GitHub login complete (stored as "${alias}").` : "GitHub login complete.");
 		return;
 	}
 
@@ -71,8 +73,8 @@ async function loginMain(backend: string | undefined): Promise<void> {
 				});
 			},
 		});
-		vault.save("gitlab", token);
-		console.log("GitLab login complete.");
+		vault.save(alias ?? "gitlab", token);
+		console.log(alias ? `GitLab login complete (stored as "${alias}").` : "GitLab login complete.");
 		return;
 	}
 
@@ -127,8 +129,8 @@ async function loginMain(backend: string | undefined): Promise<void> {
 				});
 			},
 		});
-		vault.save("google", token);
-		console.log("Google login complete.");
+		vault.save(alias ?? "google", token);
+		console.log(alias ? `Google login complete (stored as "${alias}").` : "Google login complete.");
 		return;
 	}
 
@@ -160,8 +162,8 @@ async function loginMain(backend: string | undefined): Promise<void> {
 				});
 			},
 		});
-		vault.save("jira", token);
-		console.log("Jira login complete.");
+		vault.save(alias ?? "jira", token);
+		console.log(alias ? `Jira login complete (stored as "${alias}").` : "Jira login complete.");
 		return;
 	}
 
@@ -171,12 +173,12 @@ async function loginMain(backend: string | undefined): Promise<void> {
 			console.error("JENKINS_URL, JENKINS_USER, and JENKINS_API_TOKEN are required — generate an API token from your Jenkins user's Configure page");
 			process.exit(1);
 		}
-		vault.save("jenkins", loginJenkins({ url, username, apiToken }));
-		console.log("Jenkins credentials saved.");
+		vault.save(alias ?? "jenkins", loginJenkins({ url, username, apiToken }));
+		console.log(alias ? `Jenkins credentials saved (stored as "${alias}").` : "Jenkins credentials saved.");
 		return;
 	}
 
-	console.error("usage: enigma login <github|gitlab|jenkins|jira|google|oidc>");
+	console.error("usage: enigma login <github|gitlab|jenkins|jira|google> [--as <alias>], or enigma login oidc ...");
 	process.exit(1);
 }
 

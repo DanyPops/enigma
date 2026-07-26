@@ -43,6 +43,56 @@ describe("mapCredentialToEnv", () => {
 	});
 });
 
+describe("mapCredentialToEnv > aliased built-in accounts (stored under a non-literal name via `login ... --as`)", () => {
+	it("recognizes a github-shaped credential (empty extra) stored under an alias and derives {ALIAS}_TOKEN", () => {
+		expect(mapCredentialToEnv("work", { accessToken: "gh-work-x" })).toEqual({ WORK_TOKEN: "gh-work-x" });
+	});
+
+	it("recognizes a gitlab-shaped credential (baseUrl+clientId) stored under an alias and keeps its URL companion var", () => {
+		expect(mapCredentialToEnv("gitlab-work", { accessToken: "gl-work-x", extra: { baseUrl: "https://gitlab.work.example.com", clientId: "c1" } })).toEqual({
+			GITLAB_WORK_TOKEN: "gl-work-x",
+			GITLAB_WORK_URL: "https://gitlab.work.example.com",
+		});
+	});
+
+	it("recognizes a jira-shaped credential (cloudId) stored under an alias and keeps its URL companion var", () => {
+		expect(
+			mapCredentialToEnv("jira-personal", {
+				accessToken: "jira-p-x",
+				extra: { cloudId: "cloud-1", clientId: "c1", clientSecret: "s1", siteUrl: "https://personal.atlassian.net" },
+			}),
+		).toEqual({ JIRA_PERSONAL_API_TOKEN: "jira-p-x", JIRA_PERSONAL_URL: "https://personal.atlassian.net" });
+	});
+
+	it("recognizes a jenkins-shaped credential (username+url, no clientId) stored under an alias and keeps its USER/URL companion vars", () => {
+		expect(mapCredentialToEnv("jenkins-staging", { accessToken: "tok", extra: { username: "bot", url: "https://staging.jenkins.example.com" } })).toEqual({
+			JENKINS_STAGING_API_TOKEN: "tok",
+			JENKINS_STAGING_USER: "bot",
+			JENKINS_STAGING_URL: "https://staging.jenkins.example.com",
+		});
+	});
+
+	it("recognizes a google-shaped credential (issuerUrl+clientId+clientSecret) stored under an alias, distinct from a generic-OIDC-shaped one with no secret", () => {
+		expect(
+			mapCredentialToEnv("google-personal", { accessToken: "ya29.p", extra: { issuerUrl: "https://accounts.google.com", clientId: "c1", clientSecret: "s1" } }),
+		).toEqual({ GOOGLE_PERSONAL_ACCESS_TOKEN: "ya29.p" });
+		// Same issuerUrl+clientId shape but no clientSecret: this is what generic loginOidc always
+		// produces, and must be routed through the generic single-var fallback, not googleLikeEnv.
+		expect(mapCredentialToEnv("my-company-sso", { accessToken: "x", extra: { issuerUrl: "https://sso.example.com", clientId: "c1" } })).toEqual({
+			MY_COMPANY_SSO_TOKEN: "x",
+		});
+	});
+
+	it("literal built-in names are unaffected by the new shape-detection fallback -- the switch case wins first", () => {
+		// A literal "gitlab" credential still goes through the unprefixed literal-name branch even
+		// though it would also match the gitlab shape check below it.
+		expect(mapCredentialToEnv("gitlab", { accessToken: "gl-x", extra: { baseUrl: "https://gitlab.example.com", clientId: "c1" } })).toEqual({
+			GITLAB_TOKEN: "gl-x",
+			GITLAB_URL: "https://gitlab.example.com",
+		});
+	});
+});
+
 describe("defaultEnvVarName", () => {
 	it("uppercases and sanitizes an arbitrary backend name into a _TOKEN suffixed var name", () => {
 		expect(defaultEnvVarName("my-company-sso")).toBe("MY_COMPANY_SSO_TOKEN");

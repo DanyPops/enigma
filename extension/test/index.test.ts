@@ -328,6 +328,37 @@ describe("runSecretsCommand > login", () => {
 		expect(notifications.some((n) => n.level === "error" && n.text.includes("run `enigma login` from a terminal"))).toBe(true);
 	});
 
+	it("saves a second account for the same platform under an alias when one is given", async () => {
+		const { ctx, notifications, inputPrompts } = fakeCtx({ inputs: ["github-work"] });
+		const client = fakeVaultClient({});
+		const vault = fakeVault();
+		const loginFns = fakeLoginFns();
+		process.env.GITHUB_CLIENT_ID = "fixture-client-id";
+		try {
+			await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "github", null), () => vault, loginFns, fakeBrowserOpener().open);
+		} finally {
+			delete process.env.GITHUB_CLIENT_ID;
+		}
+		expect(inputPrompts).toEqual(["Save as (optional, for a second account)"]);
+		expect(vault.saved).toEqual([{ backend: "github-work", token: { accessToken: FIXTURE_OAUTH_TOKEN } }]);
+		expect(notifications.some((n) => n.text === 'GitHub login complete (stored as "github-work").')).toBe(true);
+	});
+
+	it("defaults to the platform's literal name when no alias is given", async () => {
+		const { ctx, notifications } = fakeCtx({ inputs: [undefined] });
+		const client = fakeVaultClient({});
+		const vault = fakeVault();
+		const loginFns = fakeLoginFns();
+		process.env.GITHUB_CLIENT_ID = "fixture-client-id";
+		try {
+			await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "github", null), () => vault, loginFns, fakeBrowserOpener().open);
+		} finally {
+			delete process.env.GITHUB_CLIENT_ID;
+		}
+		expect(vault.saved).toEqual([{ backend: "github", token: { accessToken: FIXTURE_OAUTH_TOKEN } }]);
+		expect(notifications.some((n) => n.text === "GitHub login complete.")).toBe(true);
+	});
+
 	it("backing out of the backend-kind menu does nothing", async () => {
 		const { ctx } = fakeCtx();
 		const client = fakeVaultClient({});
