@@ -1,10 +1,8 @@
 /**
  * Exercises the real shipped `enigma` CLI as an actual subprocess against
  * real temp XDG paths — login (writes a real encrypted credential file),
- * then supervisor (spawns a real fixture daemon with that credential
- * injected as real env), then a real HTTP health check, then a real
- * SIGTERM proving the documented shutdown contract end to end. No mocks
- * for the spawn, the encryption, or the HTTP round-trip.
+ * a real HTTP health check, then a real SIGTERM. No mocks for the spawn,
+ * the encryption, or the HTTP round-trip.
  */
 import { describe, expect, it } from "bun:test";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -14,7 +12,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const CLI_PATH = join(import.meta.dir, "..", "src", "cli.ts");
-const FIXTURE = join(import.meta.dir, "fixtures", "fake-daemon.ts");
 
 function tmpDir(): string {
 	return mkdtempSync(join(tmpdir(), "enigma-walking-skeleton-"));
@@ -55,14 +52,6 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
 		await new Promise((resolve) => setTimeout(resolve, 50));
 	}
 	throw new Error("waitFor timed out");
-}
-
-function readLog(path: string): string[] {
-	try {
-		return readFileSync(path, "utf8").split("\n").filter(Boolean);
-	} catch {
-		return [];
-	}
 }
 
 describe("enigma walking skeleton (real CLI subprocess)", () => {
@@ -190,61 +179,6 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 		}
 	});
 
-	it("a supervised unit resolves an aliased backend under its derived prefix, with no leakage to a sibling unit using the literal (unaliased) account", async () => {
-		const dir = tmpDir();
-		let env: XdgEnv | undefined;
-		try {
-			env = { ...xdgEnv(dir), JENKINS_URL: "https://jenkins.example.com", JENKINS_USER: "bot", JENKINS_API_TOKEN: "literal-tok" };
-			expect((await runCli(["login", "jenkins"], env)).code).toBe(0);
-			const stagingEnv = { ...env, JENKINS_URL: "https://staging.jenkins.example.com", JENKINS_USER: "staging-bot", JENKINS_API_TOKEN: "aliased-tok" };
-			expect((await runCli(["login", "jenkins", "--as", "jenkins-staging"], stagingEnv)).code).toBe(0);
-
-			const logPathLiteral = join(dir, "child-log-literal.txt");
-			const logPathAliased = join(dir, "child-log-aliased.txt");
-			const configPath = join(dir, "daemons.json");
-			writeFileSync(
-				configPath,
-				JSON.stringify({
-					units: [
-						{ name: "unit-literal", bin: "bun", args: [FIXTURE, logPathLiteral], backends: ["jenkins"], restart: "no" },
-						{ name: "unit-aliased", bin: "bun", args: [FIXTURE, logPathAliased], backends: ["jenkins-staging"], restart: "no" },
-					],
-				}),
-			);
-
-			const proc = Bun.spawn(["bun", CLI_PATH, "supervisor", "--config", configPath], { env, stdout: "pipe", stderr: "pipe" });
-			try {
-				await waitFor(() => readLog(logPathLiteral).some((l) => l.startsWith("start:")) && readLog(logPathAliased).some((l) => l.startsWith("start:")));
-				const lineLiteral = readLog(logPathLiteral).find((l) => l.startsWith("start:")) ?? "";
-				const lineAliased = readLog(logPathAliased).find((l) => l.startsWith("start:")) ?? "";
-
-				// The literal (unaliased) unit gets the plain names and its own token, never the aliased account's.
-				expect(lineLiteral).toContain(`"JENKINS_API_TOKEN":"literal-tok"`);
-				expect(lineLiteral).toContain(`"JENKINS_USER":"bot"`);
-				expect(lineLiteral).not.toContain("aliased-tok");
-				expect(lineLiteral).toContain(`"JENKINS_STAGING_API_TOKEN":""`); // scrubbed: this unit never requested it
-
-				// The aliased unit gets the derived-prefix names and its own token, never the literal account's.
-				expect(lineAliased).toContain(`"JENKINS_STAGING_API_TOKEN":"aliased-tok"`);
-				expect(lineAliased).toContain(`"JENKINS_STAGING_USER":"staging-bot"`);
-				expect(lineAliased).toContain(`"JENKINS_STAGING_URL":"https://staging.jenkins.example.com"`);
-				expect(lineAliased).not.toContain("literal-tok");
-				expect(lineAliased).toContain(`"JENKINS_API_TOKEN":""`); // scrubbed: this unit never requested the literal account
-			} finally {
-				proc.kill("SIGTERM");
-				const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-				await proc.exited;
-				await waitFor(() => readLog(logPathLiteral).includes("sigterm") && readLog(logPathAliased).includes("sigterm"));
-				expect(stdout).not.toContain("literal-tok");
-				expect(stdout).not.toContain("aliased-tok");
-				expect(stderr).not.toContain("literal-tok");
-				expect(stderr).not.toContain("aliased-tok");
-			}
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
 	it("pins Secret Service across separate login and daemon processes when a desktop service is available", async () => {
 		const dbusAddress = process.env.DBUS_SESSION_BUS_ADDRESS;
 		if (!dbusAddress) return;
@@ -288,73 +222,6 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 			}
 		} finally {
 			spawnSync("/usr/bin/secret-tool", ["clear", "service", service, "username", account], { maxBuffer: 4096 });
-			rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
-	it("supervisor spawns two configured units, each with its own credential injected as real env, and SIGTERM propagates to both children, with no raw token ever printed to enigma's own output", async () => {
-		const dir = tmpDir();
-		let env: XdgEnv | undefined;
-		try {
-			env = { ...xdgEnv(dir), JENKINS_URL: "https://jenkins.example.com", JENKINS_USER: "bot", JENKINS_API_TOKEN: "supervised-real-tok" };
-			expect((await runCli(["login", "jenkins"], env)).code).toBe(0);
-
-			// Seed a second backend without coupling this supervisor test to GitHub's device flow.
-			const { createCredentialVault } = await import("../src/credential-vault.ts");
-			const { resolveConfiguredMasterKey } = await import("../src/master-key.ts");
-			const { resolveEnigmaExtraPaths, resolveEnigmaPaths } = await import("../src/paths.ts");
-			const extra = resolveEnigmaExtraPaths(resolveEnigmaPaths({ env }));
-			createCredentialVault({
-				dir: extra.credentialsDir,
-				masterKey: resolveConfiguredMasterKey(extra, env),
-			}).save("github", { accessToken: "second-unit-real-tok" });
-
-			const logPathA = join(dir, "child-log-a.txt");
-			const logPathB = join(dir, "child-log-b.txt");
-			const configPath = join(dir, "daemons.json");
-			writeFileSync(
-				configPath,
-				JSON.stringify({
-					units: [
-						{ name: "unit-a", bin: "bun", args: [FIXTURE, logPathA], backends: ["jenkins"], restart: "no" },
-						{ name: "unit-b", bin: "bun", args: [FIXTURE, logPathB], backends: ["github"], restart: "no" },
-					],
-				}),
-			);
-
-			const proc = Bun.spawn(["bun", CLI_PATH, "supervisor", "--config", configPath], { env, stdout: "pipe", stderr: "pipe" });
-			try {
-				await waitFor(() => readLog(logPathA).some((l) => l.startsWith("start:")) && readLog(logPathB).some((l) => l.startsWith("start:")));
-				const lineA = readLog(logPathA).find((l) => l.startsWith("start:")) ?? "";
-				const lineB = readLog(logPathB).find((l) => l.startsWith("start:")) ?? "";
-				expect(lineA).toContain(`"JENKINS_API_TOKEN":"supervised-real-tok"`);
-				expect(lineA).toContain(`"JENKINS_USER":"bot"`);
-				expect(lineB).toContain(`"GITHUB_TOKEN":"second-unit-real-tok"`);
-
-				// Real HTTP health check against the same process that's also supervising.
-				await waitFor(() => {
-					try {
-						JSON.parse(readFileSync(join(env!.XDG_RUNTIME_DIR, "enigma", "handle.json"), "utf8"));
-						return true;
-					} catch {
-						return false;
-					}
-				});
-				const health = await runCli(["health"], env);
-				expect(JSON.parse(health.stdout).ok).toBe(true);
-			} finally {
-				proc.kill("SIGTERM");
-				const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-				await proc.exited;
-				// Documented shutdown contract: every spawned child gets SIGTERM too.
-				await waitFor(() => readLog(logPathA).includes("sigterm") && readLog(logPathB).includes("sigterm"));
-				// The raw credential values must never appear in enigma's own process output.
-				expect(stdout).not.toContain("supervised-real-tok");
-				expect(stdout).not.toContain("second-unit-real-tok");
-				expect(stderr).not.toContain("supervised-real-tok");
-				expect(stderr).not.toContain("second-unit-real-tok");
-			}
-		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

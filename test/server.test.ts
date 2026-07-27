@@ -4,10 +4,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OidcFetch } from "../src/login-command.ts";
+import { createClientRegistry } from "../src/client-registry.ts";
 import { createCredentialVault } from "../src/credential-vault.ts";
 import { createApp } from "../src/server.ts";
 
-const TOKEN = "test-supervisor-token";
+const TOKEN = "test-admin-token";
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -24,7 +25,15 @@ const gitlabRefreshFetch: OidcFetch = async (input) => {
 
 function buildDeps(dir: string) {
 	const vault = createCredentialVault({ dir, masterKey: randomBytes(32) });
-	return { vault, token: TOKEN, fetchImpl: gitlabRefreshFetch };
+	const clients = createClientRegistry(join(dir, "clients.json"));
+	return { vault, token: TOKEN, clients, fetchImpl: gitlabRefreshFetch };
+}
+
+function withToken(path: string, token: string, init: RequestInit = {}): Request {
+	return new Request(`http://enigma.local${path}`, {
+		...init,
+		headers: { ...init.headers, authorization: `Bearer ${token}` },
+	});
 }
 
 function authed(path: string, init: RequestInit = {}): Request {
@@ -154,6 +163,98 @@ describe("enigma vault server", () => {
 		try {
 			const app = createApp(buildDeps(dir));
 			expect((await app.fetch(authed("/nonexistent-route"))).status).toBe(404);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("per-client scoped access to GET /creds/:backend", () => {
+	it("a registered client's own token can fetch a backend it's registered for", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			deps.vault.save("jira", { accessToken: "jira-token" });
+			const clientToken = deps.clients.add("tickets", ["jira", "github"]);
+			const app = createApp(deps);
+
+			const response = await app.fetch(withToken("/creds/jira", clientToken));
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ accessToken: "jira-token" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a registered client's own token for a backend it was not registered for", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			deps.vault.save("jenkins", { accessToken: "jenkins-token" });
+			const clientToken = deps.clients.add("tickets", ["jira", "github"]);
+			const app = createApp(deps);
+
+			const response = await app.fetch(withToken("/creds/jenkins", clientToken));
+			expect(response.status).toBe(403);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects an unrecognized token outright, distinct from a wrong-scope rejection", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			deps.vault.save("jira", { accessToken: "jira-token" });
+			const app = createApp(deps);
+
+			const response = await app.fetch(withToken("/creds/jira", "not-a-real-token"));
+			expect(response.status).toBe(401);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("the admin token still works against /creds/:backend regardless of client registration", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			deps.vault.save("jira", { accessToken: "jira-token" });
+			const app = createApp(deps);
+
+			expect((await app.fetch(authed("/creds/jira"))).status).toBe(200);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("a client's own token is refused on admin-only routes (health, keys, rotate, revoke)", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const clientToken = deps.clients.add("tickets", ["jira"]);
+			const app = createApp(deps);
+
+			expect((await app.fetch(withToken("/health", clientToken))).status).toBe(401);
+			expect((await app.fetch(withToken("/keys", clientToken))).status).toBe(401);
+			expect((await app.fetch(withToken("/rotate/jira", clientToken, { method: "POST" }))).status).toBe(401);
+			expect((await app.fetch(withToken("/revoke/jira", clientToken, { method: "POST" }))).status).toBe(401);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("a removed client's token stops working immediately", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			deps.vault.save("jira", { accessToken: "jira-token" });
+			const clientToken = deps.clients.add("tickets", ["jira"]);
+			const app = createApp(deps);
+			expect((await app.fetch(withToken("/creds/jira", clientToken))).status).toBe(200);
+
+			deps.clients.remove("tickets");
+			expect((await app.fetch(withToken("/creds/jira", clientToken))).status).toBe(401);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

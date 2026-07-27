@@ -2,8 +2,9 @@
 import { ensureAuthToken, readDaemonHandle } from "@danypops/daemon-kit/paths";
 import { openInBrowser } from "./browser-launcher.ts";
 import { connectEnigmaClient } from "./client.ts";
+import { ClientAlreadyRegisteredError, ClientNotFoundError, createClientRegistry } from "./client-registry.ts";
 import { createCredentialVault } from "./credential-vault.ts";
-import { serveMain, supervisorMain } from "./daemon.ts";
+import { serveMain } from "./daemon.ts";
 import { loginApiKey, loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc } from "./login-command.ts";
 import { promptMaskedSecret } from "./masked-prompt.ts";
 
@@ -227,17 +228,89 @@ async function listMain(): Promise<void> {
 	console.log(JSON.stringify(keys));
 }
 
+/**
+ * Registration is metadata (a name, an allowed-backends list, a token
+ * hash) with no dependency on the master key or the running daemon --
+ * runs entirely against the client registry file, the same way loginMain
+ * runs directly against the credential store. A running daemon picks up
+ * an add/rotate/remove on its very next request, no restart needed.
+ */
+async function clientMain(args: string[]): Promise<void> {
+	const registry = createClientRegistry(resolveEnigmaExtraPaths(resolveEnigmaPaths()).clientRegistryFile);
+	const [subcommand, name] = args;
+
+	switch (subcommand) {
+		case "add": {
+			const backendsFlag = parseFlag(args, "--backends");
+			if (!name || !backendsFlag) {
+				console.error("usage: enigma client add <name> --backends <comma,separated,list>");
+				process.exit(1);
+			}
+			try {
+				const token = registry.add(
+					name,
+					backendsFlag.split(",").map((b) => b.trim()).filter(Boolean),
+				);
+				console.log(`Registered "${name}". Token (shown once, store it in ${name}'s own config, never in Enigma):`);
+				console.log(token);
+			} catch (error) {
+				if (error instanceof ClientAlreadyRegisteredError) {
+					console.error(`${error.message} -- use "enigma client rotate ${name}" to reissue its token.`);
+					process.exit(1);
+				}
+				throw error;
+			}
+			break;
+		}
+		case "rotate": {
+			if (!name) {
+				console.error("usage: enigma client rotate <name>");
+				process.exit(1);
+			}
+			try {
+				const token = registry.rotate(name);
+				console.log(`New token for "${name}" (shown once, the old one no longer works):`);
+				console.log(token);
+			} catch (error) {
+				if (error instanceof ClientNotFoundError) {
+					console.error(error.message);
+					process.exit(1);
+				}
+				throw error;
+			}
+			break;
+		}
+		case "remove": {
+			if (!name) {
+				console.error("usage: enigma client remove <name>");
+				process.exit(1);
+			}
+			try {
+				registry.remove(name);
+				console.log(`Removed "${name}". Its token no longer works.`);
+			} catch (error) {
+				if (error instanceof ClientNotFoundError) {
+					console.error(error.message);
+					process.exit(1);
+				}
+				throw error;
+			}
+			break;
+		}
+		case "list":
+			console.log(JSON.stringify(registry.list(), null, 2));
+			break;
+		default:
+			console.error("usage: enigma client <add|rotate|remove|list>\n  add <name> --backends <list>  register a new consumer, print its token once\n  rotate <name>                 reissue a client's token, invalidating the old one\n  remove <name>                 delete a registration, invalidating its token\n  list                          show registered clients and their allowed backends (no tokens)");
+			process.exit(1);
+	}
+}
+
 try {
 	switch (command) {
 		case "serve":
 			serveMain();
 			break;
-		case "supervisor": {
-			const configFlagIndex = process.argv.indexOf("--config");
-			const configPath = configFlagIndex !== -1 ? process.argv[configFlagIndex + 1] : undefined;
-			supervisorMain(configPath);
-			break;
-		}
 		case "login":
 			await loginMain(process.argv[3]);
 			break;
@@ -249,6 +322,9 @@ try {
 			break;
 		case "list":
 			await listMain();
+			break;
+		case "client":
+			await clientMain(process.argv.slice(3));
 			break;
 		case "health": {
 			const paths = resolveEnigmaPaths();
@@ -264,9 +340,8 @@ try {
 		}
 		default:
 			console.error(
-				"usage: enigma <serve|supervisor|login|rotate|revoke|list|health>\n" +
-					"  serve                          serve the vault only, no supervision\n" +
-					"  supervisor [--config <path>]   serve the vault and spawn configured daemons\n" +
+				"usage: enigma <serve|login|rotate|revoke|list|client|health>\n" +
+					"  serve                          serve the vault; every consumer fetches its own credential\n" +
 					"  login <github|gitlab|jenkins>  authenticate and store credentials for a backend\n" +
 					"  login jira [--site <name-or-url>] [--scope <scope>]\n" +
 					"                                 Jira Cloud OAuth 2.0 (3LO), via JIRA_CLIENT_ID/JIRA_CLIENT_SECRET\n" +
@@ -279,6 +354,8 @@ try {
 					"  rotate <backend>               force a refresh of a stored credential\n" +
 					"  revoke <backend>               delete a stored credential\n" +
 					"  list                           list backends with a stored credential\n" +
+					"  client <add|rotate|remove|list>\n" +
+					"                                 register a consumer daemon and scope which backends it may fetch\n" +
 					"  health                         talk to a running instance, print status JSON",
 			);
 			process.exit(1);

@@ -5,7 +5,7 @@ import { resolveEnigmaPaths } from "./paths.ts";
 
 export function connectEnigmaClient(paths = resolveEnigmaPaths()): VaultClient {
 	const handle = readDaemonHandle(paths.handle);
-	if (!handle) throw new Error("Enigma daemon is not running; run `enigma serve` or `enigma supervisor`.");
+	if (!handle) throw new Error("Enigma daemon is not running; run `enigma serve`.");
 	const token = ensureAuthToken(paths.token, "Enigma");
 	return createVaultClient({ baseUrl: `http://${handle.host}:${handle.port}`, authToken: token });
 }

@@ -1,12 +1,16 @@
 /**
- * Vault HTTP server: loopback-only, authenticated with daemon-kit's usual
- * bearer-token pattern. This bearer token is the supervisor's own vault
- * credential — never something an agent process holds or could obtain;
- * if that boundary is already broken, the vault's isolation is moot
+ * Vault HTTP server: loopback-only. Two distinct credentials, two distinct
+ * privilege levels -- the admin token (this daemon's own, minted once at
+ * first boot) may call every route, including /rotate and /revoke; a
+ * registered client's own token may only call GET /creds/:backend, and only
+ * for backends that client was explicitly registered for. Neither token is
+ * something an agent process should hold or obtain by reading a shared
+ * file; if that boundary is already broken, the vault's isolation is moot
  * regardless of what this server does.
  */
-import { errorResponse, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "@danypops/daemon-kit/http";
+import { errorResponse, extractBearerToken, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "@danypops/daemon-kit/http";
 import { resolveRefreshFn } from "./backend-refresh.ts";
+import type { ClientRegistry } from "./client-registry.ts";
 import type { CredentialVault } from "./credential-vault.ts";
 import type { OidcFetch } from "./login-command.ts";
 import { VERSION } from "./version.ts";
@@ -14,6 +18,7 @@ import { VERSION } from "./version.ts";
 export interface ServerDeps {
 	vault: CredentialVault;
 	token: string;
+	clients: ClientRegistry;
 	/** Test-only injection point; production leaves this unset and uses global fetch. */
 	fetchImpl?: OidcFetch;
 }
@@ -27,22 +32,33 @@ function pathBackend(pathname: string, prefix: string): string | undefined {
 export function createApp(deps: ServerDeps): { fetch(request: Request): Promise<Response> } {
 	return {
 		async fetch(request: Request): Promise<Response> {
-			if (!requireBearerToken(request, deps.token)) {
-				return errorResponse("missing or invalid bearer token", 401);
-			}
 			const url = new URL(request.url);
+			const isAdmin = requireBearerToken(request, deps.token);
+
+			// GET /creds/:backend accepts either the admin token or a registered
+			// client's own token, scoped to only the backends that client was
+			// registered for -- every other route is admin-only.
+			const credsBackend = pathBackend(url.pathname, "/creds/");
+			if (request.method === "GET" && credsBackend) {
+				if (!isAdmin) {
+					const presented = extractBearerToken(request);
+					const client = presented ? deps.clients.authenticate(presented) : undefined;
+					if (!client) return errorResponse("missing or invalid bearer token", 401);
+					if (!client.backends.includes(credsBackend)) {
+						return errorResponse(`client "${client.name}" is not registered for backend "${credsBackend}"`, 403);
+					}
+				}
+				const credential = deps.vault.get(credsBackend);
+				if (!credential) return errorResponse(`no credential stored for backend "${credsBackend}"`, 404);
+				return jsonResponse(credential);
+			}
+
+			if (!isAdmin) return errorResponse("missing or invalid bearer token", 401);
 
 			if (request.method === "GET" && url.pathname === "/health") return healthResponse(VERSION);
 			if (request.method === "GET" && url.pathname === "/ready") return readyResponse(true);
 			if (request.method === "GET" && url.pathname === "/keys") {
 				return jsonResponse(deps.vault.listBackends());
-			}
-
-			const credsBackend = pathBackend(url.pathname, "/creds/");
-			if (request.method === "GET" && credsBackend) {
-				const credential = deps.vault.get(credsBackend);
-				if (!credential) return errorResponse(`no credential stored for backend "${credsBackend}"`, 404);
-				return jsonResponse(credential);
 			}
 
 			const rotateBackend = pathBackend(url.pathname, "/rotate/");
