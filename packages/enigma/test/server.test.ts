@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OidcFetch } from "../src/login-command.ts";
@@ -102,6 +102,21 @@ describe("enigma vault server", () => {
 		}
 	});
 
+	it("GET /creds/:backend is case-insensitive end to end -- a credential stored under one casing is reachable via any other", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			deps.vault.save("WidgetApi", { accessToken: "widget-token" });
+
+			expect(await (await app.fetch(authed("/creds/widgetapi"))).json()).toEqual({ accessToken: "widget-token" });
+			expect(await (await app.fetch(authed("/creds/WIDGETAPI"))).json()).toEqual({ accessToken: "widget-token" });
+			expect(await (await app.fetch(authed("/creds/WidgetApi"))).json()).toEqual({ accessToken: "widget-token" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("POST /rotate/:backend refreshes and persists, using the backend's own refresh function", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
 		try {
@@ -186,6 +201,54 @@ describe("per-client scoped access to GET /creds/:backend", () => {
 		}
 	});
 
+	it("a client registered before backend names were normalized (raw mixed-case data on disk, not written through registry.add) still gets scoped access -- defense in depth, not just a write-time fix", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			deps.vault.save("widgetapi", { accessToken: "widget-token" });
+
+			const legacyToken = "legacy-plaintext-token-not-real";
+			const registryPath = join(dir, "clients.json");
+			writeFileSync(
+				registryPath,
+				JSON.stringify({
+					version: 1,
+					clients: [
+						{
+							name: "acme-consumer",
+							backends: ["WidgetApi"], // raw casing, as production data looked before normalization
+							tokenHash: createHash("sha256").update(legacyToken).digest("hex"),
+							createdAt: new Date().toISOString(),
+						},
+					],
+				}),
+			);
+
+			const app = createApp(deps);
+			const response = await app.fetch(withToken("/creds/widgetapi", legacyToken));
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ accessToken: "widget-token" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("a client's scope check is case-insensitive end to end -- registered with one casing, credential stored and requested with others", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			deps.vault.save("WidgetApi", { accessToken: "widget-token" });
+			const clientToken = deps.clients.add("acme-consumer", ["widgetapi"]);
+			const app = createApp(deps);
+
+			const response = await app.fetch(withToken("/creds/WIDGETAPI", clientToken));
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ accessToken: "widget-token" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects a registered client's own token for a backend it was not registered for", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
 		try {
@@ -262,16 +325,16 @@ describe("per-client scoped access to GET /creds/:backend", () => {
 });
 
 describe("GET /whoami", () => {
-	it("a registered client's own token returns its exact name and backend list", async () => {
+	it("a registered client's own token returns its name and its backend list, normalized to lowercase regardless of the casing it was registered with", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
 		try {
 			const deps = buildDeps(dir);
-			const clientToken = deps.clients.add("web-spider", ["Brave", "Exa", "Tavily"]);
+			const clientToken = deps.clients.add("acme-consumer", ["WidgetApi", "GadgetApi"]);
 			const app = createApp(deps);
 
 			const response = await app.fetch(withToken("/whoami", clientToken));
 			expect(response.status).toBe(200);
-			expect(await response.json()).toEqual({ name: "web-spider", backends: ["Brave", "Exa", "Tavily"] });
+			expect(await response.json()).toEqual({ name: "acme-consumer", backends: ["widgetapi", "gadgetapi"] });
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -303,11 +366,11 @@ describe("GET /whoami", () => {
 		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
 		try {
 			const deps = buildDeps(dir);
-			const clientToken = deps.clients.add("web-spider", ["Brave"]);
+			const clientToken = deps.clients.add("acme-consumer", ["WidgetApi"]);
 			const app = createApp(deps);
 			expect((await app.fetch(withToken("/whoami", clientToken))).status).toBe(200);
 
-			deps.clients.remove("web-spider");
+			deps.clients.remove("acme-consumer");
 			expect((await app.fetch(withToken("/whoami", clientToken))).status).toBe(401);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

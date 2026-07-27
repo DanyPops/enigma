@@ -5,6 +5,7 @@
  * registered backends) and GET /whoami (its own name + backend list).
  */
 import { errorResponse, extractBearerToken, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "@danypops/daemon-kit/http";
+import { normalizeBackendName } from "./backend-env-mapping.ts";
 import { resolveRefreshFn } from "./backend-refresh.ts";
 import type { ClientRegistry } from "./client-registry.ts";
 import type { CredentialVault } from "./credential-vault.ts";
@@ -19,10 +20,11 @@ export interface ServerDeps {
 	fetchImpl?: OidcFetch;
 }
 
+/** Case-insensitive: a backend name is a lookup key, not display text (see normalizeBackendName). */
 function pathBackend(pathname: string, prefix: string): string | undefined {
 	if (!pathname.startsWith(prefix)) return undefined;
 	const rest = pathname.slice(prefix.length);
-	return rest ? decodeURIComponent(rest) : undefined;
+	return rest ? normalizeBackendName(decodeURIComponent(rest)) : undefined;
 }
 
 export function createApp(deps: ServerDeps): { fetch(request: Request): Promise<Response> } {
@@ -40,7 +42,10 @@ export function createApp(deps: ServerDeps): { fetch(request: Request): Promise<
 					const presented = extractBearerToken(request);
 					const client = presented ? deps.clients.authenticate(presented) : undefined;
 					if (!client) return errorResponse("missing or invalid bearer token", 401);
-					if (!client.backends.includes(credsBackend)) {
+					// Normalized again here, not just at registration time: an already-registered
+					// client's stored backends predate this normalization and may still carry
+					// whatever casing was typed at `enigma client add` time.
+					if (!client.backends.map(normalizeBackendName).includes(credsBackend)) {
 						return errorResponse(`client "${client.name}" is not registered for backend "${credsBackend}"`, 403);
 					}
 				}
@@ -57,7 +62,7 @@ export function createApp(deps: ServerDeps): { fetch(request: Request): Promise<
 				const presented = extractBearerToken(request);
 				const client = presented ? deps.clients.authenticate(presented) : undefined;
 				if (!client) return errorResponse("missing or invalid bearer token", 401);
-				return jsonResponse({ name: client.name, backends: client.backends });
+				return jsonResponse({ name: client.name, backends: client.backends.map(normalizeBackendName) });
 			}
 
 			if (!isAdmin) return errorResponse("missing or invalid bearer token", 401);

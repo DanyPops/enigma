@@ -179,6 +179,47 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 		}
 	});
 
+	it("backend-name casing is normalized end to end through the real CLI: login, client registration, and a live HTTP fetch all agree despite mismatched casing at each step", async () => {
+		const dir = tmpDir();
+		let env: XdgEnv | undefined;
+		try {
+			env = { ...xdgEnv(dir), ENIGMA_APIKEY_VALUE: "widget-secret-123" };
+			const login = await runCli(["login", "apikey", "--name", "WidgetApi", "--env-var", "WIDGET_API_KEY"], env);
+			expect(login.code).toBe(0);
+			expect(login.stdout).toContain('API key saved for backend "widgetapi".');
+
+			const credentialsDir = join(env.XDG_STATE_HOME, "enigma", "credentials");
+			expect(existsSync(join(credentialsDir, "widgetapi.json"))).toBe(true);
+			expect(existsSync(join(credentialsDir, "WidgetApi.json"))).toBe(false);
+
+			const add = await runCli(["client", "add", "acme-consumer", "--backends", "WIDGETAPI"], env);
+			expect(add.code).toBe(0);
+			const clientToken = add.stdout.trim().split("\n").pop() ?? "";
+			expect(clientToken.length).toBeGreaterThan(0);
+
+			const proc = Bun.spawn(["bun", CLI_PATH, "serve"], { env, stdout: "ignore", stderr: "pipe" });
+			try {
+				const handlePath = join(env!.XDG_RUNTIME_DIR, "enigma", "handle.json");
+				await waitFor(() => existsSync(handlePath));
+				const handle = JSON.parse(readFileSync(handlePath, "utf8")) as { host: string; port: number };
+				const baseUrl = `http://${handle.host}:${handle.port}`;
+
+				const whoami = await fetch(`${baseUrl}/whoami`, { headers: { authorization: `Bearer ${clientToken}` } });
+				expect(whoami.status).toBe(200);
+				expect(await whoami.json()).toEqual({ name: "acme-consumer", backends: ["widgetapi"] });
+
+				const creds = await fetch(`${baseUrl}/creds/WidgetApi`, { headers: { authorization: `Bearer ${clientToken}` } });
+				expect(creds.status).toBe(200);
+				expect(await creds.json()).toEqual({ accessToken: "widget-secret-123", extra: { envVarName: "WIDGET_API_KEY" } });
+			} finally {
+				proc.kill("SIGTERM");
+				await proc.exited;
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("pins Secret Service across separate login and daemon processes when a desktop service is available", async () => {
 		const dbusAddress = process.env.DBUS_SESSION_BUS_ADDRESS;
 		if (!dbusAddress) return;

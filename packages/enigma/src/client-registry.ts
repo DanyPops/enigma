@@ -4,12 +4,13 @@
  * never stored in plaintext -- only its SHA-256 hash is kept at rest, so
  * reading this file back never recovers a usable credential. Replaces "any
  * bearer of the vault's own admin token can fetch any backend" with
- * per-client least privilege: tickets can't fetch pipes' Jenkins credential,
- * web-spider can't fetch either of theirs.
+ * per-client least privilege: one consumer's token can't fetch a backend
+ * it was never registered for, let alone another consumer's entirely.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { normalizeBackendName } from "./backend-env-mapping.ts";
 
 const CLIENT_TOKEN_BYTES = 32;
 const MAX_REGISTRY_BYTES = 1024 * 1024;
@@ -83,7 +84,7 @@ export function createClientRegistry(path: string): ClientRegistry {
 			const registry = load(path);
 			if (registry.clients.some((c) => c.name === name)) throw new ClientAlreadyRegisteredError(name);
 			const token = randomBytes(CLIENT_TOKEN_BYTES).toString("hex");
-			registry.clients.push({ name, backends, tokenHash: hashToken(token), createdAt: new Date().toISOString() });
+			registry.clients.push({ name, backends: backends.map(normalizeBackendName), tokenHash: hashToken(token), createdAt: new Date().toISOString() });
 			save(path, registry);
 			return token;
 		},

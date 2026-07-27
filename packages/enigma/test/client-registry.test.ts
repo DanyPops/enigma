@@ -17,6 +17,13 @@ describe("createClientRegistry", () => {
 		expect(resolved?.backends).toEqual(["jira", "github"]);
 	});
 
+	it("add() normalizes backend names to lowercase -- a backend name is a lookup key, not display text", () => {
+		const registry = createClientRegistry(registryPath());
+		const token = registry.add("acme-consumer", ["WidgetApi", "GADGETAPI"]);
+		expect(registry.authenticate(token)?.backends).toEqual(["widgetapi", "gadgetapi"]);
+		expect(registry.list()[0]?.backends).toEqual(["widgetapi", "gadgetapi"]);
+	});
+
 	it("never stores the plaintext token at rest -- only its hash", () => {
 		const path = registryPath();
 		const registry = createClientRegistry(path);

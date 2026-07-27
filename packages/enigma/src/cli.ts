@@ -9,7 +9,7 @@ import { loginApiKey, loginGitHub, loginGitLab, loginGoogle, loginJenkins, login
 import { promptMaskedSecret } from "./masked-prompt.ts";
 
 const JIRA_DEFAULT_CALLBACK_PORT = 8976;
-import { defaultEnvVarName } from "./backend-env-mapping.ts";
+import { defaultEnvVarName, normalizeBackendName } from "./backend-env-mapping.ts";
 import { MasterKeyFailure, resolveConfiguredMasterKey } from "./master-key.ts";
 import { resolveEnigmaExtraPaths, resolveEnigmaPaths } from "./paths.ts";
 
@@ -32,7 +32,8 @@ async function loginMain(backend: string | undefined): Promise<void> {
 	const masterKey = resolveConfiguredMasterKey(extra);
 	const vault = createCredentialVault({ dir: extra.credentialsDir, masterKey });
 
-	const alias = parseFlag(process.argv, "--as");
+	const rawAlias = parseFlag(process.argv, "--as");
+	const alias = rawAlias ? normalizeBackendName(rawAlias) : undefined;
 
 	if (backend === "github") {
 		const clientId = process.env.GITHUB_CLIENT_ID;
@@ -81,15 +82,16 @@ async function loginMain(backend: string | undefined): Promise<void> {
 	}
 
 	if (backend === "oidc") {
-		const name = parseFlag(process.argv, "--name");
+		const rawName = parseFlag(process.argv, "--name");
 		const issuerUrl = parseFlag(process.argv, "--issuer");
 		const clientId = parseFlag(process.argv, "--client-id");
 		const scope = parseFlag(process.argv, "--scope");
 		const envVar = parseFlag(process.argv, "--env-var");
-		if (!name || !issuerUrl || !clientId) {
+		if (!rawName || !issuerUrl || !clientId) {
 			console.error("usage: enigma login oidc --name <arbitrary-name> --issuer <url> --client-id <id> [--scope <scope>] [--env-var <VAR_NAME>]");
 			process.exit(1);
 		}
+		const name = normalizeBackendName(rawName);
 		const token = await loginOidc({
 			issuerUrl,
 			clientId,
@@ -181,12 +183,13 @@ async function loginMain(backend: string | undefined): Promise<void> {
 	}
 
 	if (backend === "apikey") {
-		const name = parseFlag(process.argv, "--name");
+		const rawName = parseFlag(process.argv, "--name");
 		const envVar = parseFlag(process.argv, "--env-var");
-		if (!name || !envVar) {
+		if (!rawName || !envVar) {
 			console.error("usage: enigma login apikey --name <arbitrary-name> --env-var <VAR_NAME>");
 			process.exit(1);
 		}
+		const name = normalizeBackendName(rawName);
 		// ENIGMA_APIKEY_VALUE remains for non-interactive/scripted use (a provisioning
 		// script that already holds the secret in its own env). At a real terminal,
 		// prompt with input masked instead -- never echoed, never on argv, never in

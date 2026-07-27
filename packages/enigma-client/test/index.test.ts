@@ -152,9 +152,9 @@ describe("tryEnigmaWhoAmI", () => {
 		let server: ReturnType<typeof Bun.serve> | undefined;
 		try {
 			server = fixtureServer((request) => {
-				if (request.headers.get("authorization") !== "Bearer web-spider-token") return new Response("unauthorized", { status: 401 });
+				if (request.headers.get("authorization") !== "Bearer acme-consumer-token") return new Response("unauthorized", { status: 401 });
 				if (new URL(request.url).pathname !== "/whoami") return new Response("not found", { status: 404 });
-				return new Response(JSON.stringify({ name: "web-spider", backends: ["Brave", "Exa", "Tavily"] }), {
+				return new Response(JSON.stringify({ name: "acme-consumer", backends: ["widgetapi", "gadgetapi"] }), {
 					headers: { "content-type": "application/json" },
 				});
 			});
@@ -163,8 +163,8 @@ describe("tryEnigmaWhoAmI", () => {
 			mkdirSync(handleDir, { recursive: true });
 			writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: server.port, pid: process.pid }));
 
-			const result = await tryEnigmaWhoAmI({ env, token: "web-spider-token" });
-			expect(result).toEqual({ name: "web-spider", backends: ["Brave", "Exa", "Tavily"] });
+			const result = await tryEnigmaWhoAmI({ env, token: "acme-consumer-token" });
+			expect(result).toEqual({ name: "acme-consumer", backends: ["widgetapi", "gadgetapi"] });
 		} finally {
 			server?.stop(true);
 			rmSync(dir, { recursive: true, force: true });
