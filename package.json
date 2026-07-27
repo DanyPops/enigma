@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/enigma",
-	"version": "0.4.0",
+	"version": "0.5.0",
 	"license": "MIT",
 	"description": "Encrypted credential vault and supervisor daemon: holds delegated OAuth/API credentials for other daemons, injects them as env into spawned children, never exposes them to anything else",
 	"type": "module",

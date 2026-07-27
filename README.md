@@ -139,6 +139,8 @@ enigma login google [--scope <scope>] [--as <alias>]
                                   Drive/Docs OAuth device flow, via GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET
 enigma login oidc --name <name> --issuer <url> --client-id <id> [--scope <scope>] [--env-var <VAR_NAME>]
                                   generic OIDC device flow for any compliant provider
+enigma login apikey --name <name> --env-var <VAR_NAME>
+                                  generic static API key, no OAuth (Brave, Tavily, Exa, ...), value via ENIGMA_APIKEY_VALUE
 enigma rotate <backend>           force a refresh of a stored credential
 enigma revoke <backend>           delete a stored credential
 enigma list                       list backends with a stored credential
@@ -213,6 +215,25 @@ daemon reads — it works even before a daemon has ever been started, and an
 already-running daemon picks up a freshly logged-in credential on its very
 next request (the token provider re-reads the store fresh every time), no
 restart needed.
+
+### Static API keys (no OAuth) -- Brave, Tavily, Exa, Serper, SerpApi, ...
+
+Some consumer daemons (web-spider's search providers, for example) don't
+authenticate via OAuth at all -- just a bearer key issued from a dashboard,
+with no expiry and nothing to refresh. `enigma login apikey` covers this the
+same way `login jenkins` already covers Jenkins' own static token: the raw
+value is read from `ENIGMA_APIKEY_VALUE` (never a CLI flag, never typed into
+a `/secrets` prompt), and `--env-var` says which variable name the consumer
+daemon actually reads:
+
+```bash
+ENIGMA_APIKEY_VALUE=BSA... enigma login apikey --name brave --env-var BRAVE_SEARCH_API_KEY
+```
+
+No backend-specific code exists for this: `--name` is whatever the operator
+chooses (matching a `daemons.json` unit's `backends` entry), and the stored
+credential has no refresh capability (`resolveRefreshFn` treats it the same
+as Jenkins/GitHub -- nothing to rotate).
 
 ### Registering an OAuth App per backend
 
@@ -298,6 +319,13 @@ command or LLM tool call can drive.
 			"bin": "/path/to/pipes-daemon/src/cli.ts",
 			"args": ["serve"],
 			"backends": ["github", "gitlab"],
+			"restart": "on-failure"
+		},
+		{
+			"name": "web-spider",
+			"bin": "/path/to/web-spider-daemon/src/cli.ts",
+			"args": ["serve"],
+			"backends": ["brave", "tavily"],
 			"restart": "on-failure"
 		}
 	]

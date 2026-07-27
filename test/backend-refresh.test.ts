@@ -12,6 +12,10 @@ describe("resolveRefreshFn", () => {
 		expect(resolveRefreshFn({ accessToken: "jenkins-token", extra: { url: "https://jenkins.example.com", username: "bot" } })).toBeUndefined();
 	});
 
+	it("returns undefined for a loginApiKey-shaped credential -- a static dashboard-issued key has nothing to refresh", () => {
+		expect(resolveRefreshFn({ accessToken: "brave-key", extra: { envVarName: "BRAVE_SEARCH_API_KEY" } })).toBeUndefined();
+	});
+
 	it("resolves a GitLab-shaped refresh function (baseUrl + clientId, no issuerUrl) that hits the well-known GitLab token endpoint directly", async () => {
 		const credential = { accessToken: "stale", refreshToken: "r1", extra: { baseUrl: "https://gitlab.example.com", clientId: "c" } };
 		const fetchImpl: OidcFetch = async (input) => {

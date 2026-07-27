@@ -381,6 +381,30 @@ export async function loginJiraCloud(options: JiraCloudLoginOptions): Promise<Re
 	}
 }
 
+export interface ApiKeyLoginOptions {
+	value: string;
+	envVarName: string;
+}
+
+/**
+ * Generic static API-key backend for a platform with no OAuth flow at all
+ * (Brave, Tavily, Exa, Serper, SerpApi, or any other dashboard-issued
+ * bearer key) — the same no-OAuth shape Jenkins already has, but with an
+ * operator-supplied backend name and env var instead of a hardcoded one.
+ * No company or product ever named in source, matching loginOidc's own
+ * genericity. resolveRefreshFn already treats a credential carrying none
+ * of the recognized OAuth `extra` shapes as unrefreshable, so this needs
+ * no refresh-side change; mapCredentialToEnv's existing fallback already
+ * resolves `extra.envVarName` for a backend that isn't one of the five
+ * built-in platforms.
+ */
+export function loginApiKey(options: ApiKeyLoginOptions): RefreshableAccessToken {
+	return {
+		accessToken: options.value,
+		extra: { envVarName: options.envVarName },
+	};
+}
+
 export interface JenkinsLoginOptions {
 	url: string;
 	username: string;

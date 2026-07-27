@@ -82,9 +82,13 @@ function fakeBrowserOpener(succeeds = true): { open: (url: string) => Promise<un
 }
 
 function fakeLoginFns(overrides: Partial<LoginFns> = {}): LoginFns & { calls: Record<string, unknown[]> } {
-	const calls: Record<string, unknown[]> = { loginGitHub: [], loginGitLab: [], loginGoogle: [], loginJenkins: [], loginJiraCloud: [], loginOidc: [] };
+	const calls: Record<string, unknown[]> = { loginApiKey: [], loginGitHub: [], loginGitLab: [], loginGoogle: [], loginJenkins: [], loginJiraCloud: [], loginOidc: [] };
 	return {
 		calls,
+		loginApiKey: (opts) => {
+			calls.loginApiKey!.push(opts);
+			return { accessToken: opts.value, extra: { envVarName: opts.envVarName } };
+		},
 		loginGitHub: async (opts) => {
 			calls.loginGitHub!.push(opts);
 			opts.onPrompt({ verificationUri: "https://github.com/login/device", userCode: "ABCD-1234" });
@@ -292,6 +296,35 @@ describe("runSecretsCommand > login", () => {
 		expect(vault.saved).toEqual([{ backend: "jenkins", token: { accessToken: FIXTURE_JENKINS_TOKEN, extra: { url: "https://jenkins.example.com", username: "demo" } } }]);
 		expect(notifications.some((n) => n.text === "Jenkins credentials saved.")).toBe(true);
 		expect(JSON.stringify(notifications)).not.toContain(FIXTURE_JENKINS_TOKEN);
+	});
+
+	it("logs in a static API key from ENIGMA_APIKEY_VALUE, never typing the key itself into a prompt", async () => {
+		const { ctx, notifications, inputPrompts } = fakeCtx({ inputs: ["brave", "BRAVE_SEARCH_API_KEY"] });
+		const client = fakeVaultClient({});
+		const vault = fakeVault();
+		const loginFns = fakeLoginFns();
+		process.env.ENIGMA_APIKEY_VALUE = "brave-key-fixture";
+		try {
+			await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "apikey", null), () => vault, loginFns);
+		} finally {
+			delete process.env.ENIGMA_APIKEY_VALUE;
+		}
+		expect(inputPrompts).toEqual(["Backend name", "Env var name"]);
+		expect(vault.saved).toEqual([{ backend: "brave", token: { accessToken: "brave-key-fixture", extra: { envVarName: "BRAVE_SEARCH_API_KEY" } } }]);
+		expect(notifications.some((n) => n.text === 'API key saved for backend "brave".')).toBe(true);
+		expect(JSON.stringify(notifications)).not.toContain("brave-key-fixture");
+	});
+
+	it("refuses an API key login when ENIGMA_APIKEY_VALUE isn't set, without prompting for anything", async () => {
+		const { ctx, notifications, inputPrompts } = fakeCtx();
+		const client = fakeVaultClient({});
+		const vault = fakeVault();
+		const loginFns = fakeLoginFns();
+		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "apikey", null), () => vault, loginFns);
+		expect(inputPrompts).toEqual([]);
+		expect(loginFns.calls.loginApiKey).toEqual([]);
+		expect(vault.saved).toEqual([]);
+		expect(notifications.some((n) => n.level === "error" && n.text.includes("ENIGMA_APIKEY_VALUE"))).toBe(true);
 	});
 
 	it("collects OIDC's required fields interactively and saves under the given backend name", async () => {

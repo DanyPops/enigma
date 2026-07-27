@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc, type JiraCallbackListener, type OidcFetch } from "../src/login-command.ts";
+import { loginApiKey, loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc, type JiraCallbackListener, type OidcFetch } from "../src/login-command.ts";
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -322,5 +322,12 @@ describe("loginJenkins", () => {
 	it("wraps the static username+API-token pair with no network call at all", () => {
 		const token = loginJenkins({ url: "https://jenkins.example.com", username: "bot", apiToken: "tok-123" });
 		expect(token).toEqual({ accessToken: "tok-123", extra: { url: "https://jenkins.example.com", username: "bot" } });
+	});
+});
+
+describe("loginApiKey", () => {
+	it("wraps a bare static key under the operator-chosen env var name, with no network call at all", () => {
+		const token = loginApiKey({ value: "brave-key-abc123", envVarName: "BRAVE_SEARCH_API_KEY" });
+		expect(token).toEqual({ accessToken: "brave-key-abc123", extra: { envVarName: "BRAVE_SEARCH_API_KEY" } });
 	});
 });

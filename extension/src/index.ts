@@ -23,6 +23,7 @@ import { connectEnigmaClient } from "../../src/client.ts";
 import { createCredentialVault, type CredentialVault } from "../../src/credential-vault.ts";
 import {
 	type DeviceCodePrompt,
+	loginApiKey,
 	loginGitHub,
 	loginGitLab,
 	loginGoogle,
@@ -51,6 +52,7 @@ function buildLocalVault(): CredentialVault {
 
 /** Real login functions, injectable so tests never make a network call. */
 export interface LoginFns {
+	loginApiKey: typeof loginApiKey;
 	loginGitHub: typeof loginGitHub;
 	loginGitLab: typeof loginGitLab;
 	loginGoogle: typeof loginGoogle;
@@ -59,7 +61,7 @@ export interface LoginFns {
 	loginOidc: typeof loginOidc;
 }
 
-const defaultLoginFns: LoginFns = { loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc };
+const defaultLoginFns: LoginFns = { loginApiKey, loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc };
 
 export async function loadStatuses(client: VaultClient): Promise<RedactedCredentialStatus[]> {
 	const backends = await client.listCredentialKeys();
@@ -159,6 +161,7 @@ async function loginBackendFlow(
 		{ value: "jira", label: "jira", description: "OAuth 2.0 (3LO) \u2014 requires JIRA_CLIENT_ID and JIRA_CLIENT_SECRET" },
 		{ value: "google", label: "google", description: "Device flow \u2014 requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET" },
 		{ value: "oidc", label: "oidc", description: "Generic OIDC device flow for any compliant provider" },
+		{ value: "apikey", label: "apikey", description: "Static API key, no OAuth (Brave, Tavily, Exa, ...) — requires ENIGMA_APIKEY_VALUE" },
 		{ value: "back", label: "Back" },
 	];
 	const kind = await pick(ctx, "Log in which backend?", kindItems, "\u2191\u2193 navigate \u2022 enter select \u2022 esc back");
@@ -262,6 +265,20 @@ async function loginBackendFlow(
 			token.extra = { ...token.extra, envVarName: envVar ?? defaultEnvVarName(name) };
 			buildVault().save(name, token);
 			ctx.ui.notify(`OIDC login complete for backend "${name}".`, "info");
+			return;
+		}
+
+		if (kind === "apikey") {
+			// The raw key itself is never typed into a ctx.ui.input() prompt -- it comes from an
+			// env var the operator sets before opening this menu, matching Jenkins' own pattern
+			// of reading its static token from process.env rather than a text field.
+			const value = process.env.ENIGMA_APIKEY_VALUE;
+			if (!value) return notifyMissingEnv(ctx, "ENIGMA_APIKEY_VALUE", "set it to the raw key value before opening this menu -- it is never typed into a prompt");
+			const name = await ctx.ui.input("Backend name", "e.g. brave");
+			if (!name) return ctx.ui.notify("API key login canceled: a backend name is required.", "error");
+			const envVar = (await ctx.ui.input("Env var name", defaultEnvVarName(name))) || defaultEnvVarName(name);
+			buildVault().save(name, loginFns.loginApiKey({ value, envVarName: envVar }));
+			ctx.ui.notify(`API key saved for backend "${name}".`, "info");
 			return;
 		}
 	} catch (error) {

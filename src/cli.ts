@@ -4,7 +4,7 @@ import { openInBrowser } from "./browser-launcher.ts";
 import { connectEnigmaClient } from "./client.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import { serveMain, supervisorMain } from "./daemon.ts";
-import { loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc } from "./login-command.ts";
+import { loginApiKey, loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc } from "./login-command.ts";
 
 const JIRA_DEFAULT_CALLBACK_PORT = 8976;
 import { defaultEnvVarName } from "./backend-env-mapping.ts";
@@ -178,7 +178,24 @@ async function loginMain(backend: string | undefined): Promise<void> {
 		return;
 	}
 
-	console.error("usage: enigma login <github|gitlab|jenkins|jira|google> [--as <alias>], or enigma login oidc ...");
+	if (backend === "apikey") {
+		const name = parseFlag(process.argv, "--name");
+		const envVar = parseFlag(process.argv, "--env-var");
+		const value = process.env.ENIGMA_APIKEY_VALUE;
+		if (!name || !envVar) {
+			console.error("usage: enigma login apikey --name <arbitrary-name> --env-var <VAR_NAME>, with the raw key in ENIGMA_APIKEY_VALUE");
+			process.exit(1);
+		}
+		if (!value) {
+			console.error("ENIGMA_APIKEY_VALUE is required — set it to the raw key value before running this command (never pass the key itself as a CLI flag)");
+			process.exit(1);
+		}
+		vault.save(name, loginApiKey({ value, envVarName: envVar }));
+		console.log(`API key saved for backend "${name}".`);
+		return;
+	}
+
+	console.error("usage: enigma login <github|gitlab|jenkins|jira|google> [--as <alias>], or enigma login oidc/apikey ...");
 	process.exit(1);
 }
 
@@ -251,6 +268,8 @@ try {
 					"  login google [--scope <scope>] Drive/Docs OAuth, via GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET\n" +
 					"  login oidc --name <name> --issuer <url> --client-id <id> [--scope][--env-var]\n" +
 					"                                 generic OIDC device flow for any compliant provider\n" +
+					"  login apikey --name <name> --env-var <VAR_NAME>, key in ENIGMA_APIKEY_VALUE\n" +
+					"                                 generic static API key, no OAuth (Brave, Tavily, Exa, ...)\n" +
 					"  rotate <backend>               force a refresh of a stored credential\n" +
 					"  revoke <backend>               delete a stored credential\n" +
 					"  list                           list backends with a stored credential\n" +

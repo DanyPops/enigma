@@ -41,6 +41,10 @@ describe("mapCredentialToEnv", () => {
 	it("falls back to a sanitized default env var name for a generic backend when the operator didn't supply one", () => {
 		expect(mapCredentialToEnv("my-company-sso", { accessToken: "x" })).toEqual({ MY_COMPANY_SSO_TOKEN: "x" });
 	});
+
+	it("maps a loginApiKey-shaped credential (bare accessToken + extra.envVarName, no OAuth fields) to its own env var, not one of the five built-in shapes", () => {
+		expect(mapCredentialToEnv("brave", { accessToken: "brave-key", extra: { envVarName: "BRAVE_SEARCH_API_KEY" } })).toEqual({ BRAVE_SEARCH_API_KEY: "brave-key" });
+	});
 });
 
 describe("mapCredentialToEnv > aliased built-in accounts (stored under a non-literal name via `login ... --as`)", () => {
