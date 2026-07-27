@@ -27,6 +27,10 @@ export function serveMain(): void {
 	runDaemonProcess({
 		daemonLabel: "Enigma",
 		handlePath: paths.handle,
+		// World-readable: Enigma is a cross-user system service (its consumers run under
+		// their own OS users, not Enigma's), and the handle's own content (host/port/pid)
+		// is never sensitive -- the token file stays owner-only regardless.
+		handleMode: 0o644,
 		logger,
 		buildApp: () => createApp({ vault, token, clients }),
 		onListen: ({ host, port }) => logger.info("listening", { host, port }),

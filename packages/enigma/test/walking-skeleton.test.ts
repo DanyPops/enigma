@@ -7,7 +7,7 @@
 import { describe, expect, it } from "bun:test";
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -74,6 +74,25 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 				const { code, stdout } = await runCli(["health"], env);
 				expect(code).toBe(0);
 				expect(JSON.parse(stdout).ok).toBe(true);
+			} finally {
+				proc.kill("SIGTERM");
+				await proc.exited;
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("writes its handle file world-readable -- Enigma is a cross-user system service, unlike a same-user daemon's owner-only handle", async () => {
+		const dir = tmpDir();
+		let env: XdgEnv | undefined;
+		try {
+			env = xdgEnv(dir);
+			const proc = Bun.spawn(["bun", CLI_PATH, "serve"], { env, stdout: "ignore", stderr: "pipe" });
+			try {
+				const handlePath = join(env!.XDG_RUNTIME_DIR, "enigma", "handle.json");
+				await waitFor(() => existsSync(handlePath));
+				expect(statSync(handlePath).mode & 0o777).toBe(0o644);
 			} finally {
 				proc.kill("SIGTERM");
 				await proc.exited;

@@ -17,13 +17,16 @@
  * can never stall a caller's own startup.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { readDaemonHandle, resolveDaemonPaths } from "@danypops/daemon-kit/paths";
+import { join } from "node:path";
+import { readDaemonHandle, resolveDaemonPaths, type DaemonHandle } from "@danypops/daemon-kit/paths";
 import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
 
 const ENIGMA_STATE_DIRECTORY_NAME = "enigma";
 const ENIGMA_HANDLE_FILENAME = "handle.json";
 const ENIGMA_TOKEN_FILENAME = "token";
 const ENIGMA_LOOKUP_TIMEOUT_MS = 500;
+/** Enigma is typically a system-level service (unlike a same-user daemon), so its handle can live outside any one process's own $XDG_RUNTIME_DIR. */
+const ENIGMA_SYSTEM_RUNTIME_HANDLE = join("/run", ENIGMA_STATE_DIRECTORY_NAME, ENIGMA_HANDLE_FILENAME);
 
 /** Identical shape to RefreshableAccessToken -- Enigma always hands back a credential, never a bare token. */
 export type VaultCredential = RefreshableAccessToken;
@@ -68,13 +71,26 @@ interface ConnectedVault {
 	fetchImpl: typeof fetch;
 }
 
+/**
+ * Tries `primaryPath` first (this process's own $XDG_RUNTIME_DIR-scoped
+ * path -- a same-user dev/test Enigma, or any future same-user deployment),
+ * then `fallbackPath` (the system-wide runtime path a real production
+ * Enigma actually uses -- it runs as its own dedicated service account, not
+ * scoped to any one consumer's uid, so a consumer's own XDG_RUNTIME_DIR was
+ * never going to contain it). Exported for direct testing without needing
+ * root to write into the real /run/enigma.
+ */
+export function resolveHandle(primaryPath: string, fallbackPath: string): DaemonHandle | null {
+	return readDaemonHandle(primaryPath) ?? readDaemonHandle(fallbackPath);
+}
+
 function connect(opts: TryEnigmaCredentialOptions): ConnectedVault | undefined {
 	const env = opts.env ?? process.env;
 	const paths = resolveDaemonPaths(
 		{ stateDirectoryName: ENIGMA_STATE_DIRECTORY_NAME, handleFilename: ENIGMA_HANDLE_FILENAME, tokenFilename: ENIGMA_TOKEN_FILENAME, databaseFilename: "", systemdUnitName: "" },
 		{ env },
 	);
-	const handle = readDaemonHandle(paths.handle);
+	const handle = resolveHandle(paths.handle, ENIGMA_SYSTEM_RUNTIME_HANDLE);
 	if (!handle) return undefined; // Enigma isn't running -- not an error, just not present
 	const token = resolveToken(opts, paths.token);
 	if (!token) return undefined;

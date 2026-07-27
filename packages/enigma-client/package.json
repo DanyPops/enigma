@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/enigma-client",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"license": "MIT",
 	"description": "Client for talking to a running Enigma vault: discovers it, presents a token, fetches a credential. Never imports Enigma's own source.",
 	"type": "module",

@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tryEnigmaAccessToken, tryEnigmaCredential, tryEnigmaWhoAmI } from "../src/index.ts";
+import { resolveHandle, tryEnigmaAccessToken, tryEnigmaCredential, tryEnigmaWhoAmI } from "../src/index.ts";
 
 function tmpXdg(): { dir: string; env: { XDG_RUNTIME_DIR: string; XDG_STATE_HOME: string } } {
 	const dir = mkdtempSync(join(tmpdir(), "enigma-client-"));
@@ -183,6 +183,47 @@ describe("tryEnigmaWhoAmI", () => {
 			expect(await tryEnigmaWhoAmI({ env, token: "wrong-token" })).toBeUndefined();
 		} finally {
 			server?.stop(true);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("resolveHandle: system-wide fallback for a production Enigma not scoped to any one consumer's uid", () => {
+	it("prefers the primary (caller's own XDG_RUNTIME_DIR-scoped) path when it has a handle", () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-client-handle-"));
+		try {
+			const primary = join(dir, "primary", "handle.json");
+			const fallback = join(dir, "fallback", "handle.json");
+			mkdirSync(join(dir, "primary"), { recursive: true });
+			mkdirSync(join(dir, "fallback"), { recursive: true });
+			writeFileSync(primary, JSON.stringify({ host: "127.0.0.1", port: 1111, pid: 1 }));
+			writeFileSync(fallback, JSON.stringify({ host: "127.0.0.1", port: 2222, pid: 2 }));
+
+			expect(resolveHandle(primary, fallback)?.port).toBe(1111);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("falls back to the system-wide path when the primary has nothing -- the real production Enigma layout", () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-client-handle-"));
+		try {
+			const primary = join(dir, "primary", "handle.json"); // deliberately never written, as for a normal user session
+			const fallback = join(dir, "fallback", "handle.json");
+			mkdirSync(join(dir, "fallback"), { recursive: true });
+			writeFileSync(fallback, JSON.stringify({ host: "127.0.0.1", port: 2222, pid: 2 }));
+
+			expect(resolveHandle(primary, fallback)?.port).toBe(2222);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves null when neither path has a handle", () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-client-handle-"));
+		try {
+			expect(resolveHandle(join(dir, "a", "handle.json"), join(dir, "b", "handle.json"))).toBeNull();
+		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
