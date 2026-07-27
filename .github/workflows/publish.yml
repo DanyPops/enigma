@@ -1,24 +1,28 @@
-name: Publish @danypops/enigma
+name: Publish
 
 # Trusted publishing (OIDC): no long-lived npm tokens. npm CLI detects the
-# OIDC environment automatically (requires npm >= 11.5.1). Configure the
-# trusted publisher on npmjs.com: org=DanyPops repo=enigma workflow=publish.yml
+# OIDC environment automatically (requires npm >= 11.5.1). One workflow
+# file, two independently tag-triggered jobs -- npmjs.com's trusted
+# publisher is configured per package name (org=DanyPops repo=enigma
+# workflow=publish.yml), and a package's own trust entry only cares that
+# the workflow filename and repo match, not which job within it ran.
 #
-# Tag stays a bare "v*" for continuity with this package's existing release
-# history predating the packages/enigma-client workspace member -- see
-# publish-enigma-client.yml for that package's own tag/workflow.
+# @danypops/enigma:        tag "v*"
+# @danypops/enigma-client: tag "enigma-client-v*"
 
 on:
   push:
     tags:
       - "v*"
+      - "enigma-client-v*"
 
 permissions:
   id-token: write # Required for OIDC
   contents: read
 
 jobs:
-  publish:
+  publish-enigma:
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -48,4 +52,29 @@ jobs:
       # --provenance is documented as automatic under trusted publishing, but is
       # confirmed (npm/cli#8730) to be needed explicitly in practice for the OIDC
       # exchange to actually trigger -- without it npm CLI falls back to ENEEDAUTH.
+      - run: npm publish --access public --provenance
+
+  publish-enigma-client:
+    if: startsWith(github.ref, 'refs/tags/enigma-client-v')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/enigma-client
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
+        working-directory: .
+      - run: bun test
+      - run: bun x tsc --noEmit
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - run: npm install -g npm@latest && npm --version
+
       - run: npm publish --access public --provenance
