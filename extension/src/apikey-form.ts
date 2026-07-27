@@ -17,14 +17,41 @@ import { type Component, Input, Key, matchesKey } from "@earendil-works/pi-tui";
  * for the same privacy reason, and skipping it here is a deliberate
  * choice, not an oversight.
  */
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
+
 export class MaskedInput implements Component {
 	private value = "";
+	// Bracketed-paste buffering -- mirrors pi-tui's own Input component. Without
+	// this, a terminal paste (Ctrl+V/Ctrl+Shift+V, most Linux terminals) arrives
+	// wrapped in PASTE_START/PASTE_END and starts with \x1b, so the plain
+	// escape-sequence filter below would otherwise silently drop the whole paste.
+	private pasteBuffer = "";
+	private isInPaste = false;
 
 	getValue(): string {
 		return this.value;
 	}
 
 	handleInput(data: string): void {
+		if (data.includes(PASTE_START)) {
+			this.isInPaste = true;
+			this.pasteBuffer = "";
+			data = data.replace(PASTE_START, "");
+		}
+		if (this.isInPaste) {
+			this.pasteBuffer += data;
+			const endIndex = this.pasteBuffer.indexOf(PASTE_END);
+			if (endIndex !== -1) {
+				const pasted = this.pasteBuffer.slice(0, endIndex).replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, "");
+				this.value += pasted;
+				this.isInPaste = false;
+				const remaining = this.pasteBuffer.slice(endIndex + PASTE_END.length);
+				this.pasteBuffer = "";
+				if (remaining) this.handleInput(remaining);
+			}
+			return;
+		}
 		if (matchesKey(data, Key.backspace) || matchesKey(data, "ctrl+h")) {
 			this.value = this.value.slice(0, -1);
 			return;

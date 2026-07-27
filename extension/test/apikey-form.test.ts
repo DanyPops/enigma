@@ -41,6 +41,33 @@ describe("MaskedInput", () => {
 		input.handleInput("\x1b[D"); // left arrow
 		expect(input.getValue()).toBe("");
 	});
+
+	it("accepts a bracketed-paste sequence (Ctrl+V/Ctrl+Shift+V in most terminals) as one chunk, unlike a plain escape sequence", () => {
+		const input = new MaskedInput();
+		input.handleInput("\x1b[200~sk-pasted-secret-value\x1b[201~");
+		expect(input.getValue()).toBe("sk-pasted-secret-value");
+		expect(input.render(80)[0]).toBe("•".repeat("sk-pasted-secret-value".length));
+	});
+
+	it("buffers a bracketed paste split across multiple handleInput calls (a long paste arriving in several PTY chunks)", () => {
+		const input = new MaskedInput();
+		input.handleInput("\x1b[200~sk-pas");
+		input.handleInput("ted-secre");
+		input.handleInput("t-value\x1b[201~");
+		expect(input.getValue()).toBe("sk-pasted-secret-value");
+	});
+
+	it("strips a trailing newline from a pasted value (common clipboard artifact) without corrupting the key", () => {
+		const input = new MaskedInput();
+		input.handleInput("\x1b[200~sk-secret\n\x1b[201~");
+		expect(input.getValue()).toBe("sk-secret");
+	});
+
+	it("processes input typed immediately after a paste ends in the same chunk", () => {
+		const input = new MaskedInput();
+		input.handleInput("\x1b[200~pasted\x1b[201~typed");
+		expect(input.getValue()).toBe("pastedtyped");
+	});
 });
 
 describe("ApiKeyRegistrationForm", () => {
