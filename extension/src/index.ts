@@ -17,6 +17,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import type { VaultClient } from "@danypops/daemon-kit/vault";
+import { type ApiKeyFormResult, ApiKeyRegistrationForm } from "./apikey-form.ts";
 import { defaultEnvVarName } from "../../src/backend-env-mapping.ts";
 import { type BrowserOpener, openInBrowser } from "../../src/browser-launcher.ts";
 import { connectEnigmaClient } from "../../src/client.ts";
@@ -71,6 +72,37 @@ export async function loadStatuses(client: VaultClient): Promise<RedactedCredent
 		statuses.push(redactCredentialStatus(backend, credential));
 	}
 	return statuses;
+}
+
+/**
+ * Three-field form (name, env var, masked value) for a static API key --
+ * the value field never renders the real characters typed/pasted into it.
+ * Returns null on cancel (Escape).
+ */
+async function promptApiKeyForm(ctx: ExtensionCommandContext): Promise<ApiKeyFormResult | null> {
+	return ctx.ui.custom<ApiKeyFormResult | null>((tui, theme, _keybindings, done) => {
+		const container = new Container();
+		container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+		container.addChild(new Text(theme.fg("accent", theme.bold("Register a static API key")), 1, 0));
+		const form = new ApiKeyRegistrationForm({
+			label: (s) => theme.fg("muted", s),
+			focusedLabel: (s) => theme.fg("accent", s),
+			help: (s) => theme.fg("dim", s),
+			error: (s) => theme.fg("error", s),
+		});
+		form.onSubmit = (result) => done(result);
+		form.onCancel = () => done(null);
+		container.addChild(form);
+		container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+		return {
+			render: (w) => container.render(w),
+			invalidate: () => container.invalidate(),
+			handleInput: (data) => {
+				form.handleInput(data);
+				tui.requestRender();
+			},
+		};
+	});
 }
 
 async function pickFromList(ctx: ExtensionCommandContext, title: string, items: SelectItem[], helpText: string): Promise<string | null> {
@@ -147,12 +179,15 @@ async function promptAlias(ctx: ExtensionCommandContext, literalName: string): P
 	return alias || literalName;
 }
 
+export type PromptApiKeyForm = (ctx: ExtensionCommandContext) => Promise<ApiKeyFormResult | null>;
+
 async function loginBackendFlow(
 	ctx: ExtensionCommandContext,
 	buildVault: () => CredentialVault = buildLocalVault,
 	pick: PickFromList = pickFromList,
 	loginFns: LoginFns = defaultLoginFns,
 	browserOpener?: BrowserOpener,
+	promptApiKey: PromptApiKeyForm = promptApiKeyForm,
 ): Promise<void> {
 	const kindItems: SelectItem[] = [
 		{ value: "github", label: "github", description: "Device flow \u2014 requires GITHUB_CLIENT_ID" },
@@ -269,16 +304,25 @@ async function loginBackendFlow(
 		}
 
 		if (kind === "apikey") {
-			// The raw key itself is never typed into a ctx.ui.input() prompt -- it comes from an
-			// env var the operator sets before opening this menu, matching Jenkins' own pattern
-			// of reading its static token from process.env rather than a text field.
-			const value = process.env.ENIGMA_APIKEY_VALUE;
-			if (!value) return notifyMissingEnv(ctx, "ENIGMA_APIKEY_VALUE", "set it to the raw key value before opening this menu -- it is never typed into a prompt");
-			const name = await ctx.ui.input("Backend name", "e.g. brave");
-			if (!name) return ctx.ui.notify("API key login canceled: a backend name is required.", "error");
-			const envVar = (await ctx.ui.input("Env var name", defaultEnvVarName(name))) || defaultEnvVarName(name);
-			buildVault().save(name, loginFns.loginApiKey({ value, envVarName: envVar }));
-			ctx.ui.notify(`API key saved for backend "${name}".`, "info");
+			// ENIGMA_APIKEY_VALUE (automation/scripting): skip the form, keep the
+			// lightweight two-prompt flow -- there is no secret left to mask, it
+			// already arrived via the operator's own environment.
+			const envValue = process.env.ENIGMA_APIKEY_VALUE;
+			if (envValue) {
+				const name = await ctx.ui.input("Backend name", "e.g. brave");
+				if (!name) return ctx.ui.notify("API key login canceled: a backend name is required.", "error");
+				const envVar = (await ctx.ui.input("Env var name", defaultEnvVarName(name))) || defaultEnvVarName(name);
+				buildVault().save(name, loginFns.loginApiKey({ value: envValue, envVarName: envVar }));
+				ctx.ui.notify(`API key saved for backend "${name}".`, "info");
+				return;
+			}
+			// Interactive (the common case): a real registration form with a masked
+			// value field -- the key is never typed into a plain ctx.ui.input(),
+			// which has no masked mode at all.
+			const result = await promptApiKey(ctx);
+			if (!result) return; // canceled, no notification needed
+			buildVault().save(result.name, loginFns.loginApiKey({ value: result.value, envVarName: result.envVar }));
+			ctx.ui.notify(`API key saved for backend "${result.name}".`, "info");
 			return;
 		}
 	} catch (error) {
@@ -293,6 +337,7 @@ export async function runSecretsCommand(
 	buildVault: () => CredentialVault = buildLocalVault,
 	loginFns: LoginFns = defaultLoginFns,
 	browserOpener?: BrowserOpener,
+	promptApiKey: PromptApiKeyForm = promptApiKeyForm,
 ): Promise<void> {
 	let client: VaultClient;
 	try {
@@ -327,7 +372,7 @@ export async function runSecretsCommand(
 		if (!selected) return;
 
 		if (selected === LOGIN_ACTION) {
-			await loginBackendFlow(ctx, buildVault, pick, loginFns, browserOpener);
+			await loginBackendFlow(ctx, buildVault, pick, loginFns, browserOpener, promptApiKey);
 			continue;
 		}
 

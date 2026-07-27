@@ -5,6 +5,7 @@ import { connectEnigmaClient } from "./client.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import { serveMain, supervisorMain } from "./daemon.ts";
 import { loginApiKey, loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc } from "./login-command.ts";
+import { promptMaskedSecret } from "./masked-prompt.ts";
 
 const JIRA_DEFAULT_CALLBACK_PORT = 8976;
 import { defaultEnvVarName } from "./backend-env-mapping.ts";
@@ -181,13 +182,17 @@ async function loginMain(backend: string | undefined): Promise<void> {
 	if (backend === "apikey") {
 		const name = parseFlag(process.argv, "--name");
 		const envVar = parseFlag(process.argv, "--env-var");
-		const value = process.env.ENIGMA_APIKEY_VALUE;
 		if (!name || !envVar) {
-			console.error("usage: enigma login apikey --name <arbitrary-name> --env-var <VAR_NAME>, with the raw key in ENIGMA_APIKEY_VALUE");
+			console.error("usage: enigma login apikey --name <arbitrary-name> --env-var <VAR_NAME>");
 			process.exit(1);
 		}
+		// ENIGMA_APIKEY_VALUE remains for non-interactive/scripted use (a provisioning
+		// script that already holds the secret in its own env). At a real terminal,
+		// prompt with input masked instead -- never echoed, never on argv, never in
+		// shell history the way `ENIGMA_APIKEY_VALUE=... enigma ...` on one line would be.
+		const value = process.env.ENIGMA_APIKEY_VALUE ?? (await promptMaskedSecret(`Paste the "${name}" API key (input hidden): `));
 		if (!value) {
-			console.error("ENIGMA_APIKEY_VALUE is required — set it to the raw key value before running this command (never pass the key itself as a CLI flag)");
+			console.error("no API key value provided — paste one at the prompt, or set ENIGMA_APIKEY_VALUE for non-interactive use");
 			process.exit(1);
 		}
 		vault.save(name, loginApiKey({ value, envVarName: envVar }));
@@ -268,8 +273,9 @@ try {
 					"  login google [--scope <scope>] Drive/Docs OAuth, via GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET\n" +
 					"  login oidc --name <name> --issuer <url> --client-id <id> [--scope][--env-var]\n" +
 					"                                 generic OIDC device flow for any compliant provider\n" +
-					"  login apikey --name <name> --env-var <VAR_NAME>, key in ENIGMA_APIKEY_VALUE\n" +
-					"                                 generic static API key, no OAuth (Brave, Tavily, Exa, ...)\n" +
+					"  login apikey --name <name> --env-var <VAR_NAME>\n" +
+					"                                 generic static API key, no OAuth (Brave, Tavily, Exa, ...) —\n" +
+					"                                 prompts with input hidden, or set ENIGMA_APIKEY_VALUE non-interactively\n" +
 					"  rotate <backend>               force a refresh of a stored credential\n" +
 					"  revoke <backend>               delete a stored credential\n" +
 					"  list                           list backends with a stored credential\n" +

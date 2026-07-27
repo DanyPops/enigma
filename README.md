@@ -140,7 +140,8 @@ enigma login google [--scope <scope>] [--as <alias>]
 enigma login oidc --name <name> --issuer <url> --client-id <id> [--scope <scope>] [--env-var <VAR_NAME>]
                                   generic OIDC device flow for any compliant provider
 enigma login apikey --name <name> --env-var <VAR_NAME>
-                                  generic static API key, no OAuth (Brave, Tavily, Exa, ...), value via ENIGMA_APIKEY_VALUE
+                                  generic static API key, no OAuth (Brave, Tavily, Exa, ...) --
+                                  prompts with input hidden, or set ENIGMA_APIKEY_VALUE non-interactively
 enigma rotate <backend>           force a refresh of a stored credential
 enigma revoke <backend>           delete a stored credential
 enigma list                       list backends with a stored credential
@@ -221,14 +222,23 @@ restart needed.
 Some consumer daemons (web-spider's search providers, for example) don't
 authenticate via OAuth at all -- just a bearer key issued from a dashboard,
 with no expiry and nothing to refresh. `enigma login apikey` covers this the
-same way `login jenkins` already covers Jenkins' own static token: the raw
-value is read from `ENIGMA_APIKEY_VALUE` (never a CLI flag, never typed into
-a `/secrets` prompt), and `--env-var` says which variable name the consumer
-daemon actually reads:
+same way `login jenkins` already covers Jenkins' own static token, but the
+value is never a CLI flag: at a real terminal it's a masked prompt (input
+hidden, never echoed, never on argv or in shell history); non-interactively
+(scripting, provisioning) set `ENIGMA_APIKEY_VALUE` instead and the prompt
+is skipped. `--env-var` says which variable name the consumer daemon
+actually reads:
 
 ```bash
-ENIGMA_APIKEY_VALUE=BSA... enigma login apikey --name brave --env-var BRAVE_SEARCH_API_KEY
+enigma login apikey --name brave --env-var BRAVE_SEARCH_API_KEY
+Paste the "brave" API key (input hidden): 
 ```
+
+The `/secrets` command inside pi opens the same registration form (name,
+env var, masked value field) rather than the plain, unmasked `ctx.ui.input()`
+dialog every other backend kind uses -- pi's extension API has no masked
+input primitive of its own, so this is a small purpose-built TUI component
+(`extension/src/apikey-form.ts`), not the built-in dialog.
 
 No backend-specific code exists for this: `--name` is whatever the operator
 chooses (matching a `daemons.json` unit's `backends` entry), and the stored

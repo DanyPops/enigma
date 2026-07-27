@@ -315,16 +315,29 @@ describe("runSecretsCommand > login", () => {
 		expect(JSON.stringify(notifications)).not.toContain("brave-key-fixture");
 	});
 
-	it("refuses an API key login when ENIGMA_APIKEY_VALUE isn't set, without prompting for anything", async () => {
+	it("opens the interactive registration form (never ctx.ui.input) when ENIGMA_APIKEY_VALUE isn't set, and saves its result", async () => {
 		const { ctx, notifications, inputPrompts } = fakeCtx();
 		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
-		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "apikey", null), () => vault, loginFns);
-		expect(inputPrompts).toEqual([]);
-		expect(loginFns.calls.loginApiKey).toEqual([]);
+		const promptApiKey = async () => ({ name: "exa", envVar: "EXA_API_KEY", value: "exa-key-fixture" });
+		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "apikey", null), () => vault, loginFns, undefined, promptApiKey);
+		expect(inputPrompts).toEqual([]); // the value never goes through the plain, unmasked ctx.ui.input()
+		expect(vault.saved).toEqual([{ backend: "exa", token: { accessToken: "exa-key-fixture", extra: { envVarName: "EXA_API_KEY" } } }]);
+		expect(notifications.some((n) => n.text === 'API key saved for backend "exa".')).toBe(true);
+		expect(JSON.stringify(notifications)).not.toContain("exa-key-fixture");
+	});
+
+	it("does nothing and reports no error when the registration form is canceled", async () => {
+		const { ctx, notifications } = fakeCtx();
+		const client = fakeVaultClient({});
+		const vault = fakeVault();
+		const loginFns = fakeLoginFns();
+		const promptApiKey = async () => null;
+		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "apikey", null), () => vault, loginFns, undefined, promptApiKey);
 		expect(vault.saved).toEqual([]);
-		expect(notifications.some((n) => n.level === "error" && n.text.includes("ENIGMA_APIKEY_VALUE"))).toBe(true);
+		expect(loginFns.calls.loginApiKey).toEqual([]);
+		expect(notifications.some((n) => n.level === "error")).toBe(false);
 	});
 
 	it("collects OIDC's required fields interactively and saves under the given backend name", async () => {
