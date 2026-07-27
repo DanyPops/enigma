@@ -1,30 +1,21 @@
 /**
- * Owns everything daemon-kit's generic spawnUnit deliberately doesn't:
- * restart policy, credential resolution per unit, and a well-defined
- * shutdown contract. Runs in-process with the vault server (one `enigma
- * supervisor` process does both), so credential lookups go straight
- * through the in-process CredentialVault — no HTTP round-trip to itself.
+ * Owns only what's genuinely Enigma-specific: credential resolution per unit
+ * and the freshness predicate that triggers a restart. Restart-policy
+ * interpretation, the planned-restart mechanism, and the shutdown contract
+ * moved to @danypops/daemon-kit/process-supervisor (generalized directly from
+ * this module's own prior implementation, once it became clear none of that
+ * was actually about credentials). Runs in-process with the vault server (one
+ * `enigma supervisor` process does both), so credential lookups go straight
+ * through the in-process CredentialVault -- no HTTP round-trip to itself.
  */
-import { spawnUnit, type DaemonUnit, type SpawnedUnit, type SupervisorConfig } from "@danypops/daemon-kit/supervisor";
+import { runProcessSupervisor, type RunningProcessSupervisor, type SupervisedUnitConfig } from "@danypops/daemon-kit/process-supervisor";
+import type { DaemonUnit, SupervisorConfig } from "@danypops/daemon-kit/supervisor";
 import { isTokenFresh } from "@danypops/daemon-kit/vault";
 import type { Logger } from "@danypops/daemon-kit/logging";
 import { ALL_CREDENTIAL_ENV_VAR_NAMES, mapCredentialToEnv } from "./backend-env-mapping.ts";
 import type { CredentialVault } from "./credential-vault.ts";
 
-const NOOP_LOGGER: Logger = { debug() {}, info() {}, warn() {}, error() {} };
-const DEFAULT_FRESHNESS_CHECK_MS = 30_000;
-
-export interface RunningSupervisor {
-	stop(): Promise<void>;
-}
-
-interface ManagedUnit {
-	unit: DaemonUnit;
-	current?: SpawnedUnit;
-	stopping: boolean;
-	/** Set just before a freshness-triggered kill so the exit handler relaunches unconditionally, bypassing restart policy — policy governs unplanned exits (crashes), not a refresh WE initiated. */
-	refreshing: boolean;
-}
+export type RunningSupervisor = RunningProcessSupervisor;
 
 /**
  * Every env var name that *could* apply across the whole supervisor
@@ -89,53 +80,13 @@ export interface RunSupervisorOptions {
  * optimization, not built here.
  */
 export function runSupervisor(config: SupervisorConfig, vault: CredentialVault, options: RunSupervisorOptions = {}): RunningSupervisor {
-	const logger = options.logger ?? NOOP_LOGGER;
-	const managed: ManagedUnit[] = config.units.map((unit) => ({ unit, stopping: false, refreshing: false }));
+	const units: SupervisedUnitConfig[] = config.units.map((unit) => ({
+		...unit,
+		// Recomputed on every (re)launch, not once at supervisor start -- an
+		// operator can register a new backend's credential between restarts.
+		resolveEnv: () => resolveUnitEnv(unit, vault, collectAllPossibleEnvVarNames(config, vault)),
+		shouldPlannedRestart: () => !unitCredentialsAreFresh(unit, vault),
+	}));
 
-	function launch(entry: ManagedUnit): void {
-		const env = resolveUnitEnv(entry.unit, vault, collectAllPossibleEnvVarNames(config, vault));
-		const spawned = spawnUnit(entry.unit, env);
-		entry.current = spawned;
-		logger.info("unit started", { name: entry.unit.name, pid: spawned.pid });
-
-		void spawned.exited.then((code) => {
-			if (entry.stopping) return;
-			logger.info("unit exited", { name: entry.unit.name, code });
-			if (entry.refreshing) {
-				entry.refreshing = false;
-				launch(entry);
-				return;
-			}
-			const policy = entry.unit.restart ?? "no";
-			const shouldRestart = policy === "always" || (policy === "on-failure" && code !== 0);
-			if (shouldRestart) launch(entry);
-		});
-	}
-
-	for (const entry of managed) launch(entry);
-
-	const freshnessTimer = setInterval(() => {
-		for (const entry of managed) {
-			if (entry.stopping || !entry.current) continue;
-			if (!unitCredentialsAreFresh(entry.unit, vault)) {
-				logger.info("unit credentials nearing expiry, restarting with fresh env", { name: entry.unit.name });
-				entry.refreshing = true;
-				entry.current.kill("SIGTERM");
-				// The exited-promise handler above launches the replacement once this
-				// process actually exits; not launched here to avoid a double-spawn race.
-			}
-		}
-	}, options.freshnessCheckMs ?? DEFAULT_FRESHNESS_CHECK_MS);
-
-	return {
-		/** Documented shutdown contract: every child gets SIGTERM and stop() waits for all of them to exit. */
-		async stop(): Promise<void> {
-			clearInterval(freshnessTimer);
-			for (const entry of managed) {
-				entry.stopping = true;
-				entry.current?.kill("SIGTERM");
-			}
-			await Promise.all(managed.map((entry) => entry.current?.exited).filter((p): p is Promise<number> => p !== undefined));
-		},
-	};
+	return runProcessSupervisor(units, { logger: options.logger, plannedRestartCheckMs: options.freshnessCheckMs });
 }
