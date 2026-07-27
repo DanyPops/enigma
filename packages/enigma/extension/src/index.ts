@@ -1,13 +1,13 @@
 /**
  * pi-enigma: `/secrets` command for interactive vault management from inside
  * Pi. Human-driven only -- no LLM-callable tool here. Talks to the same
- * running `enigma serve`/`enigma supervisor` daemon the CLI does, via the
- * same VaultClient daemon-kit already ships; this lives in enigma's own
- * package (not a separate one depending on it over npm), so importing
- * ../../src/client.ts directly is a plain relative TypeScript import, not a
- * cross-package boundary jiti would need to transpile through node_modules --
- * confirmed safe by @danypops/jittor's own extension/src/service-client.ts,
- * which does exactly this against its own daemon.
+ * running `enigma serve` daemon the CLI does, via the same EnigmaAdminClient;
+ * this lives in enigma's own package (not a separate one depending on it
+ * over npm), so importing ../../src/client.ts directly is a plain relative
+ * TypeScript import, not a cross-package boundary jiti would need to
+ * transpile through node_modules -- confirmed safe by @danypops/jittor's
+ * own extension/src/service-client.ts, which does exactly this against its
+ * own daemon.
  *
  * Never surfaces accessToken/refreshToken/extra: every value shown here comes
  * from redactCredentialStatus's explicit allow-list, per the standing rule
@@ -16,11 +16,10 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
-import type { VaultClient } from "@danypops/daemon-kit/vault";
 import { type ApiKeyFormResult, ApiKeyRegistrationForm } from "./apikey-form.ts";
 import { defaultEnvVarName } from "../../src/backend-env-mapping.ts";
 import { type BrowserOpener, openInBrowser } from "../../src/browser-launcher.ts";
-import { connectEnigmaClient } from "../../src/client.ts";
+import { connectEnigmaClient, type EnigmaAdminClient } from "../../src/client.ts";
 import { createCredentialVault, type CredentialVault } from "../../src/credential-vault.ts";
 import {
 	type DeviceCodePrompt,
@@ -64,7 +63,7 @@ export interface LoginFns {
 
 const defaultLoginFns: LoginFns = { loginApiKey, loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc };
 
-export async function loadStatuses(client: VaultClient): Promise<RedactedCredentialStatus[]> {
+export async function loadStatuses(client: EnigmaAdminClient): Promise<RedactedCredentialStatus[]> {
 	const backends = await client.listCredentialKeys();
 	const statuses: RedactedCredentialStatus[] = [];
 	for (const backend of backends) {
@@ -133,7 +132,7 @@ async function pickFromList(ctx: ExtensionCommandContext, title: string, items: 
 
 export type PickFromList = (ctx: ExtensionCommandContext, title: string, items: SelectItem[], helpText: string) => Promise<string | null>;
 
-async function manageBackend(ctx: ExtensionCommandContext, client: VaultClient, backend: string, pick: PickFromList = pickFromList): Promise<void> {
+async function manageBackend(ctx: ExtensionCommandContext, client: EnigmaAdminClient, backend: string, pick: PickFromList = pickFromList): Promise<void> {
 	for (;;) {
 		const credential = await client.getCredentials(backend);
 		const status = redactCredentialStatus(backend, credential);
@@ -332,14 +331,14 @@ async function loginBackendFlow(
 
 export async function runSecretsCommand(
 	ctx: ExtensionCommandContext,
-	connect: () => VaultClient = connectEnigmaClient,
+	connect: () => EnigmaAdminClient = connectEnigmaClient,
 	pick: PickFromList = pickFromList,
 	buildVault: () => CredentialVault = buildLocalVault,
 	loginFns: LoginFns = defaultLoginFns,
 	browserOpener?: BrowserOpener,
 	promptApiKey: PromptApiKeyForm = promptApiKeyForm,
 ): Promise<void> {
-	let client: VaultClient;
+	let client: EnigmaAdminClient;
 	try {
 		client = connect();
 	} catch (error) {

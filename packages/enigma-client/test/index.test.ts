@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tryEnigmaAccessToken, tryEnigmaCredential } from "../src/index.ts";
+import { tryEnigmaAccessToken, tryEnigmaCredential, tryEnigmaWhoAmI } from "../src/index.ts";
 
 function tmpXdg(): { dir: string; env: { XDG_RUNTIME_DIR: string; XDG_STATE_HOME: string } } {
 	const dir = mkdtempSync(join(tmpdir(), "enigma-client-"));
@@ -132,6 +132,57 @@ describe("tryEnigmaAccessToken", () => {
 		try {
 			expect(await tryEnigmaAccessToken("github", { env })).toBeUndefined();
 		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("tryEnigmaWhoAmI", () => {
+	it("resolves undefined immediately when no Enigma handle file exists", async () => {
+		const { dir, env } = tmpXdg();
+		try {
+			expect(await tryEnigmaWhoAmI({ env })).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("fetches this client's own name and backend scope from a live vault", async () => {
+		const { dir, env } = tmpXdg();
+		let server: ReturnType<typeof Bun.serve> | undefined;
+		try {
+			server = fixtureServer((request) => {
+				if (request.headers.get("authorization") !== "Bearer web-spider-token") return new Response("unauthorized", { status: 401 });
+				if (new URL(request.url).pathname !== "/whoami") return new Response("not found", { status: 404 });
+				return new Response(JSON.stringify({ name: "web-spider", backends: ["Brave", "Exa", "Tavily"] }), {
+					headers: { "content-type": "application/json" },
+				});
+			});
+
+			const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+			mkdirSync(handleDir, { recursive: true });
+			writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: server.port, pid: process.pid }));
+
+			const result = await tryEnigmaWhoAmI({ env, token: "web-spider-token" });
+			expect(result).toEqual({ name: "web-spider", backends: ["Brave", "Exa", "Tavily"] });
+		} finally {
+			server?.stop(true);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves undefined for a wrong token, same as any other unauthenticated call", async () => {
+		const { dir, env } = tmpXdg();
+		let server: ReturnType<typeof Bun.serve> | undefined;
+		try {
+			server = fixtureServer(() => new Response("unauthorized", { status: 401 }));
+			const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+			mkdirSync(handleDir, { recursive: true });
+			writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: server.port, pid: process.pid }));
+
+			expect(await tryEnigmaWhoAmI({ env, token: "wrong-token" })).toBeUndefined();
+		} finally {
+			server?.stop(true);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

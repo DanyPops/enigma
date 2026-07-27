@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { VaultCredential } from "@danypops/daemon-kit/vault";
+import type { VaultCredential } from "../../src/client.ts";
 import { describeCredentialStatus, redactCredentialStatus } from "../src/redact.ts";
 
 const REAL_LOOKING_TOKEN = "ghp_1234567890abcdefghijklmnopqrstuvwxyz12";

@@ -260,3 +260,57 @@ describe("per-client scoped access to GET /creds/:backend", () => {
 		}
 	});
 });
+
+describe("GET /whoami", () => {
+	it("a registered client's own token returns its exact name and backend list", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const clientToken = deps.clients.add("web-spider", ["Brave", "Exa", "Tavily"]);
+			const app = createApp(deps);
+
+			const response = await app.fetch(withToken("/whoami", clientToken));
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ name: "web-spider", backends: ["Brave", "Exa", "Tavily"] });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("the admin token gets a distinct, unrestricted self-description rather than a client's own scope", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const app = createApp(buildDeps(dir));
+			const response = await app.fetch(authed("/whoami"));
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ name: "admin", backends: null });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects an unrecognized token, same as any other route", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const app = createApp(buildDeps(dir));
+			expect((await app.fetch(withToken("/whoami", "not-a-real-token"))).status).toBe(401);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("a removed client's token stops working against /whoami too", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const clientToken = deps.clients.add("web-spider", ["Brave"]);
+			const app = createApp(deps);
+			expect((await app.fetch(withToken("/whoami", clientToken))).status).toBe(200);
+
+			deps.clients.remove("web-spider");
+			expect((await app.fetch(withToken("/whoami", clientToken))).status).toBe(401);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

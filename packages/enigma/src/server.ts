@@ -1,12 +1,8 @@
 /**
  * Vault HTTP server: loopback-only. Two distinct credentials, two distinct
- * privilege levels -- the admin token (this daemon's own, minted once at
- * first boot) may call every route, including /rotate and /revoke; a
- * registered client's own token may only call GET /creds/:backend, and only
- * for backends that client was explicitly registered for. Neither token is
- * something an agent process should hold or obtain by reading a shared
- * file; if that boundary is already broken, the vault's isolation is moot
- * regardless of what this server does.
+ * privilege levels -- the admin token may call every route; a registered
+ * client's own token may only call GET /creds/:backend (scoped to its
+ * registered backends) and GET /whoami (its own name + backend list).
  */
 import { errorResponse, extractBearerToken, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "@danypops/daemon-kit/http";
 import { resolveRefreshFn } from "./backend-refresh.ts";
@@ -51,6 +47,17 @@ export function createApp(deps: ServerDeps): { fetch(request: Request): Promise<
 				const credential = deps.vault.get(credsBackend);
 				if (!credential) return errorResponse(`no credential stored for backend "${credsBackend}"`, 404);
 				return jsonResponse(credential);
+			}
+
+			// A client's own name + backend list -- nothing sensitive, so any
+			// bearer works. Lets a consumer discover its real scope instead of
+			// hardcoding backend names.
+			if (request.method === "GET" && url.pathname === "/whoami") {
+				if (isAdmin) return jsonResponse({ name: "admin", backends: null });
+				const presented = extractBearerToken(request);
+				const client = presented ? deps.clients.authenticate(presented) : undefined;
+				if (!client) return errorResponse("missing or invalid bearer token", 401);
+				return jsonResponse({ name: client.name, backends: client.backends });
 			}
 
 			if (!isAdmin) return errorResponse("missing or invalid bearer token", 401);

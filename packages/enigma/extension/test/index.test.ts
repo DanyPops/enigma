@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { RefreshableAccessToken, VaultClient, VaultCredential } from "@danypops/daemon-kit/vault";
+import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
+import type { EnigmaAdminClient, VaultCredential } from "../../src/client.ts";
 import type { CredentialVault } from "../../src/credential-vault.ts";
 import { LOGIN_ACTION, type LoginFns, loadStatuses, runSecretsCommand, type PickFromList } from "../src/index.ts";
 
@@ -8,7 +9,7 @@ const REAL_LOOKING_TOKEN = "ghp_1234567890abcdefghijklmnopqrstuvwxyz12";
 const FIXTURE_JENKINS_TOKEN = "jenkins-fixture-token-not-real";
 const FIXTURE_OAUTH_TOKEN = "fixture-oauth-token-not-real";
 
-function fakeVaultClient(records: Record<string, VaultCredential>): VaultClient & { rotated: string[]; revoked: string[] } {
+function fakeVaultClient(records: Record<string, VaultCredential>): EnigmaAdminClient & { rotated: string[]; revoked: string[] } {
 	const client = {
 		rotated: [] as string[],
 		revoked: [] as string[],
@@ -152,7 +153,7 @@ describe("runSecretsCommand", () => {
 
 	it("reports a clear error when the vault is unreachable mid-session", async () => {
 		const { ctx, notifications } = fakeCtx();
-		const client: VaultClient = {
+		const client: EnigmaAdminClient = {
 			listCredentialKeys: async () => {
 				throw new Error("vault request failed: GET /keys: HTTP 500");
 			},

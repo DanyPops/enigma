@@ -4,7 +4,7 @@
  * VaultCredential, never derived by stripping known-secret keys off the raw
  * record. accessToken, refreshToken, and extra never pass through this file.
  */
-import type { VaultCredential } from "@danypops/daemon-kit/vault";
+import type { VaultCredential } from "../../src/client.ts";
 
 export interface RedactedCredentialStatus {
 	backend: string;

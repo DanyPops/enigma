@@ -3,7 +3,10 @@
  * happens to be configured on this machine. Purely additive -- a consumer
  * never imports Enigma's own source, only its documented discovery contract
  * (a state-directory name and handle/token filenames) via @danypops/daemon-kit,
- * which every daemon already depends on for its own plumbing.
+ * which every daemon already depends on for its own plumbing. Enigma's own
+ * wire protocol (GET /creds/:backend, GET /whoami) is implemented directly
+ * here, not borrowed from a "generic" daemon-kit abstraction -- it's
+ * Enigma's own protocol, not a standard other vaults implement.
  *
  * Never creates Enigma's handle or token files -- those are strictly
  * Enigma's own job on first boot. A consumer that could mint them would be
@@ -15,14 +18,21 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { readDaemonHandle, resolveDaemonPaths } from "@danypops/daemon-kit/paths";
-import { createVaultClient, type VaultCredential } from "@danypops/daemon-kit/vault";
+import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
 
 const ENIGMA_STATE_DIRECTORY_NAME = "enigma";
 const ENIGMA_HANDLE_FILENAME = "handle.json";
 const ENIGMA_TOKEN_FILENAME = "token";
 const ENIGMA_LOOKUP_TIMEOUT_MS = 500;
 
-export type { VaultCredential };
+/** Identical shape to RefreshableAccessToken -- Enigma always hands back a credential, never a bare token. */
+export type VaultCredential = RefreshableAccessToken;
+
+/** A client's own registration, as Enigma sees it: its name and the backends it may fetch. `backends: null` means unrestricted (the admin token). */
+export interface EnigmaWhoAmI {
+	name: string;
+	backends: string[] | null;
+}
 
 export interface TryEnigmaCredentialOptions {
 	env?: Record<string, string | undefined>;
@@ -39,6 +49,8 @@ export interface TryEnigmaCredentialOptions {
 }
 
 export type TryEnigmaCredential = (backend: string, opts?: TryEnigmaCredentialOptions) => Promise<VaultCredential | undefined>;
+export type TryEnigmaAccessToken = (backend: string, opts?: TryEnigmaCredentialOptions) => Promise<string | undefined>;
+export type TryEnigmaWhoAmI = (opts?: TryEnigmaCredentialOptions) => Promise<EnigmaWhoAmI | undefined>;
 
 function resolveToken(opts: TryEnigmaCredentialOptions, tokenPath: string): string | undefined {
 	if (opts.token) return opts.token;
@@ -50,35 +62,55 @@ function resolveToken(opts: TryEnigmaCredentialOptions, tokenPath: string): stri
 	}
 }
 
-/** Fetches the full stored credential (accessToken + extra), for a backend whose credential is more than a bare token (url/username live in extra, e.g. Jenkins). */
-export const tryEnigmaCredential: TryEnigmaCredential = async (backend, opts = {}) => {
+interface ConnectedVault {
+	baseUrl: string;
+	token: string;
+	fetchImpl: typeof fetch;
+}
+
+function connect(opts: TryEnigmaCredentialOptions): ConnectedVault | undefined {
 	const env = opts.env ?? process.env;
 	const paths = resolveDaemonPaths(
 		{ stateDirectoryName: ENIGMA_STATE_DIRECTORY_NAME, handleFilename: ENIGMA_HANDLE_FILENAME, tokenFilename: ENIGMA_TOKEN_FILENAME, databaseFilename: "", systemdUnitName: "" },
 		{ env },
 	);
-
 	const handle = readDaemonHandle(paths.handle);
 	if (!handle) return undefined; // Enigma isn't running -- not an error, just not present
-
 	const token = resolveToken(opts, paths.token);
 	if (!token) return undefined;
+	return { baseUrl: `http://${handle.host}:${handle.port}`, token, fetchImpl: opts.fetchImpl ?? fetch };
+}
 
-	const fetchImpl = opts.fetchImpl ?? fetch;
-	const client = createVaultClient({
-		baseUrl: `http://${handle.host}:${handle.port}`,
-		authToken: token,
-		fetchImpl: (url, init) => fetchImpl(url, { ...init, signal: AbortSignal.timeout(ENIGMA_LOOKUP_TIMEOUT_MS) }),
+async function getJson<T>(vault: ConnectedVault, path: string): Promise<T | undefined> {
+	const response = await vault.fetchImpl(`${vault.baseUrl}${path}`, {
+		headers: { authorization: `Bearer ${vault.token}` },
+		signal: AbortSignal.timeout(ENIGMA_LOOKUP_TIMEOUT_MS),
 	});
+	if (!response.ok) return undefined; // 401/403/404/5xx alike -- "nothing usable," never surfaced as an error
+	return (await response.json()) as T;
+}
 
+/** Fetches the full stored credential (accessToken + extra), for a backend whose credential is more than a bare token (url/username live in extra, e.g. Jenkins). */
+export const tryEnigmaCredential: TryEnigmaCredential = async (backend, opts = {}) => {
+	const vault = connect(opts);
+	if (!vault) return undefined;
 	try {
-		return await client.getCredentials(backend);
+		return await getJson<VaultCredential>(vault, `/creds/${encodeURIComponent(backend)}`);
 	} catch {
 		return undefined; // unreachable, timed out, or any other transport failure -- fall through silently
 	}
 };
 
-export type TryEnigmaAccessToken = (backend: string, opts?: TryEnigmaCredentialOptions) => Promise<string | undefined>;
-
 /** Resolves just the access token -- what a caller needs when it already resolves baseUrl/etc. separately from env. */
 export const tryEnigmaAccessToken: TryEnigmaAccessToken = async (backend, opts = {}) => (await tryEnigmaCredential(backend, opts))?.accessToken;
+
+/** This client's own real scope, from Enigma itself -- lets a caller discover its registered backends instead of hardcoding them. */
+export const tryEnigmaWhoAmI: TryEnigmaWhoAmI = async (opts = {}) => {
+	const vault = connect(opts);
+	if (!vault) return undefined;
+	try {
+		return await getJson<EnigmaWhoAmI>(vault, "/whoami");
+	} catch {
+		return undefined;
+	}
+};
