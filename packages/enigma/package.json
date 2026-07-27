@@ -1,8 +1,8 @@
 {
 	"name": "@danypops/enigma",
-	"version": "0.6.1",
+	"version": "0.7.0",
 	"license": "MIT",
-	"description": "Encrypted credential vault and supervisor daemon: holds delegated OAuth/API credentials for other daemons, injects them as env into spawned children, never exposes them to anything else",
+	"description": "Encrypted credential vault daemon: holds delegated OAuth/API credentials, serves each registered consumer only its own scoped credentials over an authenticated local endpoint",
 	"type": "module",
 	"keywords": ["pi-package"],
 	"files": ["src", "extension", "package.json"],
