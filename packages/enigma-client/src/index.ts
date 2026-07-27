@@ -78,7 +78,7 @@ export const tryEnigmaCredential: TryEnigmaCredential = async (backend, opts = {
 	}
 };
 
+export type TryEnigmaAccessToken = (backend: string, opts?: TryEnigmaCredentialOptions) => Promise<string | undefined>;
+
 /** Resolves just the access token -- what a caller needs when it already resolves baseUrl/etc. separately from env. */
-export async function tryEnigmaAccessToken(backend: string, opts: TryEnigmaCredentialOptions = {}): Promise<string | undefined> {
-	return (await tryEnigmaCredential(backend, opts))?.accessToken;
-}
+export const tryEnigmaAccessToken: TryEnigmaAccessToken = async (backend, opts = {}) => (await tryEnigmaCredential(backend, opts))?.accessToken;
