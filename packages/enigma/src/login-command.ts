@@ -394,9 +394,8 @@ export interface ApiKeyLoginOptions {
  * No company or product ever named in source, matching loginOidc's own
  * genericity. resolveRefreshFn already treats a credential carrying none
  * of the recognized OAuth `extra` shapes as unrefreshable, so this needs
- * no refresh-side change; mapCredentialToEnv's existing fallback already
- * resolves `extra.envVarName` for a backend that isn't one of the five
- * built-in platforms.
+ * no refresh-side change; `extra.envVarName` is stashed for whichever
+ * consumer fetches this credential to use as its own default env var name.
  */
 export function loginApiKey(options: ApiKeyLoginOptions): RefreshableAccessToken {
 	return {

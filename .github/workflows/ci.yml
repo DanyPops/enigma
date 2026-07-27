@@ -25,7 +25,7 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
         timeout-minutes: 3
-      - run: bun x tsc --noEmit
+      - run: bun run --filter '*' check
         timeout-minutes: 3
       - run: bun test
         timeout-minutes: 5
@@ -65,9 +65,9 @@ jobs:
         timeout-minutes: 2
       - run: bun install --frozen-lockfile
         timeout-minutes: 5
-      - run: bun x tsc --noEmit
+      - run: bun run --filter '*' check
         timeout-minutes: 3
-      - run: bun test test/master-key.test.ts test/native-master-key.test.ts
+      - run: bun test packages/enigma/test/master-key.test.ts packages/enigma/test/native-master-key.test.ts
         timeout-minutes: 5
         env:
           # macOS-only: proves the Keychain adapter fails closed, within its own

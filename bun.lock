@@ -3,7 +3,14 @@
   "configVersion": 1,
   "workspaces": {
     "": {
+      "name": "enigma-workspace",
+    },
+    "packages/enigma": {
       "name": "@danypops/enigma",
+      "version": "0.6.1",
+      "bin": {
+        "enigma": "src/cli.ts",
+      },
       "dependencies": {
         "@danypops/daemon-kit": "^0.12.0",
         "@napi-rs/keyring": "^1.3.0",
@@ -18,6 +25,17 @@
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "*",
         "@earendil-works/pi-tui": "*",
+      },
+    },
+    "packages/enigma-client": {
+      "name": "@danypops/enigma-client",
+      "version": "0.1.0",
+      "dependencies": {
+        "@danypops/daemon-kit": "^0.12.0",
+      },
+      "devDependencies": {
+        "bun-types": "latest",
+        "typescript": "^5.9.3",
       },
     },
   },
@@ -75,6 +93,10 @@
     "@babel/runtime": ["@babel/runtime@7.29.7", "", {}, "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw=="],
 
     "@danypops/daemon-kit": ["@danypops/daemon-kit@0.12.0", "", { "dependencies": { "pino": "^10.3.1" }, "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "typescript": "^5" }, "optionalPeers": ["@earendil-works/pi-coding-agent"] }, "sha512-nx9SDdgdMdCIDfa/IIkf6Klk+F/pyhX7JrhDiCoyxEN5w7mzPe1dJ1okcU3JkjXhBztvf/sMxwVMwTNdYxdEsw=="],
+
+    "@danypops/enigma": ["@danypops/enigma@workspace:packages/enigma"],
+
+    "@danypops/enigma-client": ["@danypops/enigma-client@workspace:packages/enigma-client"],
 
     "@earendil-works/pi-agent-core": ["@earendil-works/pi-agent-core@0.82.1", "", { "dependencies": { "@earendil-works/pi-ai": "^0.82.1", "diff": "8.0.4", "ignore": "7.0.5", "typebox": "1.1.38", "yaml": "2.9.0" } }, "sha512-Z3kloziJIE2dmrisRckZX8zDca/gIv9/YdFAzeoqpHiLV2wsni6bL4hInNSjVKLbqT+4kqLIkph2JQLKvSepjg=="],
 

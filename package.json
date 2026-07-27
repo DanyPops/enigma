@@ -1,38 +1,15 @@
 {
-	"name": "@danypops/enigma",
-	"version": "0.6.1",
-	"license": "MIT",
-	"description": "Encrypted credential vault and supervisor daemon: holds delegated OAuth/API credentials for other daemons, injects them as env into spawned children, never exposes them to anything else",
+	"name": "enigma-workspace",
+	"private": true,
 	"type": "module",
-	"keywords": ["pi-package"],
-	"files": ["src", "extension", "package.json"],
-	"bin": {
-		"enigma": "src/cli.ts"
-	},
-	"pi": {
-		"extensions": ["extension/src/index.ts"]
-	},
+	"workspaces": ["packages/*"],
 	"scripts": {
-		"test": "bun test",
-		"check": "bun x tsc --noEmit"
-	},
-	"dependencies": {
-		"@danypops/daemon-kit": "^0.12.0",
-		"@napi-rs/keyring": "^1.3.0",
-		"open": "^11.0.0",
-		"openid-client": "^6.8.4"
-	},
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*"
-	},
-	"devDependencies": {
-		"@types/node": "^22.19.19",
-		"bun-types": "latest",
-		"typescript": "^5.9.3"
+		"test": "bun run --filter '*' test",
+		"check": "bun run --filter '*' check"
 	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/DanyPops/enigma.git"
-	}
+	},
+	"license": "MIT"
 }

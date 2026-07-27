@@ -1,17 +1,15 @@
-name: Publish @danypops/enigma
+name: Publish @danypops/enigma-client
 
 # Trusted publishing (OIDC): no long-lived npm tokens. npm CLI detects the
 # OIDC environment automatically (requires npm >= 11.5.1). Configure the
-# trusted publisher on npmjs.com: org=DanyPops repo=enigma workflow=publish.yml
-#
-# Tag stays a bare "v*" for continuity with this package's existing release
-# history predating the packages/enigma-client workspace member -- see
-# publish-enigma-client.yml for that package's own tag/workflow.
+# trusted publisher on npmjs.com: org=DanyPops repo=enigma workflow=publish-enigma-client.yml
+# -- required separately from @danypops/enigma's own trusted publisher
+# since it's a distinct npm package name.
 
 on:
   push:
     tags:
-      - "v*"
+      - "enigma-client-v*"
 
 permissions:
   id-token: write # Required for OIDC
@@ -22,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: packages/enigma
+        working-directory: packages/enigma-client
     steps:
       - uses: actions/checkout@v6
 
