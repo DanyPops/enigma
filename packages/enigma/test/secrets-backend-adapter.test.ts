@@ -54,4 +54,31 @@ describe("createEnigmaSecretsBackend", () => {
 		await createEnigmaSecretsBackend(client).revoke("github");
 		expect(client.revoked).toEqual(["github"]);
 	});
+
+	it("reveal() returns the full credential unredacted, unlike get()/list()", async () => {
+		const client = fakeClient({ github: { accessToken: "gho_real_value", refreshToken: "refresh_real_value", scope: "repo", extra: { cloudId: "abc" } } });
+		expect(await createEnigmaSecretsBackend(client).reveal("github")).toEqual({
+			accessToken: "gho_real_value",
+			refreshToken: "refresh_real_value",
+			scope: "repo",
+			extra: { cloudId: "abc" },
+		});
+	});
+
+	it("reveal() resolves undefined for a backend Enigma has no credential for", async () => {
+		const client = fakeClient({});
+		expect(await createEnigmaSecretsBackend(client).reveal("github")).toBeUndefined();
+	});
+
+	it("reveal() calls the client's own getCredentials -- the same path get()/list() use, and the same audited GET /creds/:backend route enigma show uses", async () => {
+		const calls: string[] = [];
+		const client = fakeClient({ github: { accessToken: "x" } });
+		const originalGetCredentials = client.getCredentials;
+		client.getCredentials = async (backend: string) => {
+			calls.push(backend);
+			return originalGetCredentials(backend);
+		};
+		await createEnigmaSecretsBackend(client).reveal("github");
+		expect(calls).toEqual(["github"]);
+	});
 });

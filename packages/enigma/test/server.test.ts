@@ -5,9 +5,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "@danypops/daemon-kit/logging";
 import type { OidcFetch } from "../src/login-command.ts";
+import type { EnigmaAdminClient, VaultCredential } from "../src/client.ts";
 import { createClientRegistry } from "../src/client-registry.ts";
 import { createCredentialVault } from "../src/credential-vault.ts";
 import { createApp, createUnixSocketHandler } from "../src/server.ts";
+import { createEnigmaSecretsBackend } from "../src/secrets-backend-adapter.ts";
+
+/** A minimal EnigmaAdminClient whose getCredentials hits the real app.fetch -- lets a test drive createEnigmaSecretsBackend().reveal() against the genuine HTTP route and its real audit logging, not a fake in-memory client. */
+function clientOverHttp(app: { fetch: (request: Request) => Promise<Response> }): EnigmaAdminClient {
+	return {
+		listCredentialKeys: async () => [],
+		getCredentials: async (backend: string) => {
+			const response = await app.fetch(authed(`/creds/${encodeURIComponent(backend)}`));
+			if (response.status === 404) return undefined;
+			if (!response.ok) throw new Error(`unexpected status ${response.status}`);
+			return (await response.json()) as VaultCredential;
+		},
+		rotateCredential: async () => {},
+		revokeCredential: async () => {},
+		listClients: async () => [],
+		health: async () => ({ ok: true, version: "test" }),
+	};
+}
 
 const TOKEN = "test-admin-token";
 
@@ -525,6 +544,25 @@ describe("credential audit logging: every read/rotate/revoke is logged, never th
 			// The whole point: no log entry anywhere contains the actual secret value.
 			expect(JSON.stringify(entries)).not.toContain("super-secret-value");
 			expect(JSON.stringify(entries)).not.toContain("also secret");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("reveal() through createEnigmaSecretsBackend hits the real audited route -- credential_access fires, value never appears in the log", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const { logger, entries } = fakeLogger();
+			const deps = { ...buildDeps(dir), logger };
+			deps.vault.save("widgetapi", { accessToken: "super-secret-value" });
+			const app = createApp(deps);
+			const backend = createEnigmaSecretsBackend(clientOverHttp(app));
+
+			const revealed = await backend.reveal("widgetapi");
+
+			expect(revealed).toEqual({ accessToken: "super-secret-value" });
+			expect(entries).toEqual([{ msg: "credential_access", fields: { backend: "widgetapi", outcome: "ok", identity: "admin" } }]);
+			expect(JSON.stringify(entries)).not.toContain("super-secret-value");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

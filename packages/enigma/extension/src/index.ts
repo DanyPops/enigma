@@ -324,6 +324,7 @@ export function buildEnigmaSecretsContribution(
 		get: (name) => createEnigmaSecretsBackend(ensureClient()).get(name),
 		rotate: (name) => createEnigmaSecretsBackend(ensureClient()).rotate(name),
 		revoke: (name) => createEnigmaSecretsBackend(ensureClient()).revoke(name),
+		reveal: (name) => createEnigmaSecretsBackend(ensureClient()).reveal(name),
 	};
 	const servicesRegistry: ServicesRegistry = { list: () => createEnigmaServicesRegistry(ensureClient()).list() };
 	return {

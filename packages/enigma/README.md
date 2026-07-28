@@ -151,22 +151,28 @@ enigma health                     talk to a running instance, print status JSON
 
 ### Viewing a real credential value
 
-Every other surface (`enigma list`, `/secrets` in pi) is deliberately
-redacted -- names and status only, never the value. `enigma show <backend>`
-is the one place a raw value is printed, for the same reason a mature
-secrets manager like HashiCorp Vault still lets an operator `vault kv get`
-a secret: restricting the admin-token holder from ever reading their own
-vault's contents isn't a real access boundary (the admin token already
-permits an equivalent read via `GET /creds/:backend`), it's just missing
-ergonomics. `enigma show` goes through that same authenticated path, so it
-is covered by the same audit logging every credential read gets (see
-below) -- not a silent bypass.
+`enigma list` and `/secrets`' [services]/[secrets] menus stay redacted by
+default -- names and status only. Two places show the real value, both
+going through the same authenticated `GET /creds/:backend` path and so
+both covered by the same audit logging (below):
 
-This command is CLI-only, for a human at a real terminal. It is never
-wired into the pi extension's `/secrets` command, which stays redacted --
-that surface sits inside an AI agent session, where the model itself (not
-just the human who typed the command) can end up reading whatever the
-command renders.
+- `enigma show <backend>` -- CLI, for a human at a real terminal.
+- `/secrets`' per-secret **Reveal** action -- pi's own shared secrets
+  command, but refused outright outside a real interactive TUI session
+  (`ctx.mode !== "tui"`): `/secrets` is one command definition shared
+  across tui/rpc/print/json modes, and an RPC-driven caller could
+  otherwise walk the same menu picks a human would in TUI and mechanize a
+  raw read. A human actually sitting at the terminal isn't restricted --
+  they already have an equivalent read via `enigma show` regardless of
+  what `/secrets` does, so gating the TUI path too achieves nothing beyond
+  closing the one caller that's genuinely different: a non-interactive one.
+
+Restricting the admin-token holder from ever reading their own vault's
+contents isn't a real access boundary either way -- the admin token
+already permits an equivalent read via `GET /creds/:backend` directly.
+This mirrors a mature secrets manager like HashiCorp Vault still letting
+an operator `vault kv get` a secret: the boundary that matters is
+accountability (audit logging), not pretending the value is unreachable.
 
 ### Audit logging
 
@@ -338,17 +344,19 @@ Testing status, independent of rotation).
 
 The `secrets` slash command manages the vault from inside [pi](https://pi.dev):
 list configured backends, view redacted status (expiry/scope, never the
-token), rotate, or revoke -- also usable from `/secrets`' [services] menu
-for any other daemon-kit consumer sharing that command in the same
-session (pipes, tickets). Enabled automatically once this package is
-installed as a pi extension (`pi.extensions` in `package.json`); talks to
-the same running `enigma serve`/`enigma supervisor` daemon the CLI does.
-Never returns `accessToken`/`refreshToken`/`extra` to the command output --
-see `src/secrets-backend-adapter.ts`'s explicit SecretRecord allow-list.
-Login stays CLI-only (`enigma login <backend>`); it's an interactive
-device-flow prompt, not something a slash command or LLM tool call can
-drive. `enigma show <backend>` (above) is the one place a raw value is
-printed, and it stays CLI-only for the same reason.
+token), rotate, revoke, or reveal the real value -- also usable from
+`/secrets`' [services] menu for any other daemon-kit consumer sharing that
+command in the same session (pipes, tickets). Enabled automatically once
+this package is installed as a pi extension (`pi.extensions` in
+`package.json`); talks to the same running `enigma serve`/`enigma
+supervisor` daemon the CLI does. `list`/`get` never return
+`accessToken`/`refreshToken`/`extra` -- see
+`src/secrets-backend-adapter.ts`'s explicit SecretRecord allow-list.
+Reveal is the one deliberate exception, and only fires in a real
+interactive TUI session (see "Viewing a real credential value" above);
+RPC/print/JSON invocations of `/secrets` are refused. Login stays
+CLI-only (`enigma login <backend>`); it's an interactive device-flow
+prompt, not something a slash command or LLM tool call can drive.
 
 ## Supervisor config
 

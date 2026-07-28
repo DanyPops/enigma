@@ -443,6 +443,12 @@ describe("buildEnigmaSecretsContribution", () => {
 		expect(contribution.extraActions?.map((a) => a.value)).toEqual([LOGIN_ACTION]);
 	});
 
+	it("reveal() delegates through to the real client's getCredentials, same as get()/list()", async () => {
+		const connect = () => fakeVaultClient({ github: { accessToken: "gho_real_value", scope: "repo" } });
+		const contribution = buildEnigmaSecretsContribution(connect);
+		expect(await contribution.backends[0]?.reveal("github")).toEqual({ accessToken: "gho_real_value", scope: "repo" });
+	});
+
 	it("connects exactly once even when the backend and the servicesRegistry are both used", async () => {
 		let connectCount = 0;
 		const connect = () => {

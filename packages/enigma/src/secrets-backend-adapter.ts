@@ -4,10 +4,14 @@
  * EnigmaAdminClient's own wire protocol -- vendor-specific, same reason
  * enigma-client itself stays out of daemon-kit.
  *
- * Every field on the returned SecretRecord is redaction-safe by
- * construction, matching this project's own extension/src/redact.ts:
- * accessToken/refreshToken/extra never leave client.getCredentials()'s
- * result here.
+ * list()/get() stay redaction-safe by construction: every SecretRecord
+ * field comes from toRecord()'s explicit allow-list, never
+ * accessToken/refreshToken/extra directly. reveal() is the one deliberate
+ * exception -- it returns client.getCredentials()'s result unredacted, the
+ * same real GET /creds/:backend read `enigma show` uses, so it's covered
+ * by that route's own audit logging either way. secrets-tui.ts's
+ * performReveal is what actually gates this to a real interactive TUI
+ * session; this adapter has no opinion on who's allowed to call it.
  */
 import type { SecretRecord, SecretsBackend } from "@danypops/daemon-kit/secrets-backend";
 import type { EnigmaAdminClient, VaultCredential } from "./client.ts";
@@ -37,6 +41,10 @@ export function createEnigmaSecretsBackend(client: EnigmaAdminClient): SecretsBa
 		},
 		async revoke(name) {
 			await client.revokeCredential(name);
+		},
+		async reveal(name) {
+			const credential = await client.getCredentials(name);
+			return credential ? (credential as unknown as Record<string, unknown>) : undefined;
 		},
 	};
 }
