@@ -258,6 +258,55 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 		}
 	});
 
+	it("a real client fetches a real credential over the Unix-socket transport with zero bearer token, authenticated purely by its real OS uid", async () => {
+		const dir = tmpDir();
+		let env: (XdgEnv & { ENIGMA_ADMIN_UID: string }) | undefined;
+		try {
+			const myUid = process.getuid?.();
+			expect(myUid).toBeDefined();
+			env = { ...xdgEnv(dir), ENIGMA_APIKEY_VALUE: "widget-secret-123", ENIGMA_ADMIN_UID: String(myUid) };
+
+			const login = await runCli(["login", "apikey", "--name", "WidgetApi", "--env-var", "WIDGET_API_KEY"], env);
+			expect(login.code).toBe(0);
+
+			const proc = Bun.spawn(["bun", CLI_PATH, "serve"], { env, stdout: "ignore", stderr: "pipe" });
+			try {
+				const socketPath = join(env.XDG_RUNTIME_DIR, "enigma", "admin.sock");
+				await waitFor(() => existsSync(socketPath));
+
+				// Raw client speaking unix-rpc-server's own newline-delimited JSON framing directly --
+				// no Authorization header at all, proving identity comes only from the real connecting
+				// process's own kernel-verified uid (this test process's own, running as admin here).
+				const { promise, resolve } = Promise.withResolvers<{ status: number; body: string | null }>();
+				let buffered = "";
+				const client = await Bun.connect({
+					unix: socketPath,
+					socket: {
+						open(socket) {
+							socket.write(`${JSON.stringify({ method: "GET", path: "/creds/WidgetApi" })}\n`);
+						},
+						data(_socket, chunk) {
+							buffered += chunk.toString("utf8");
+							const newlineIndex = buffered.indexOf("\n");
+							if (newlineIndex !== -1) resolve(JSON.parse(buffered.slice(0, newlineIndex)));
+						},
+						close() {},
+					},
+				});
+				const response = await promise;
+				client.end();
+
+				expect(response.status).toBe(200);
+				expect(JSON.parse(response.body ?? "null")).toEqual({ accessToken: "widget-secret-123", extra: { envVarName: "WIDGET_API_KEY" } });
+			} finally {
+				proc.kill("SIGTERM");
+				await proc.exited;
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("pins Secret Service across separate login and daemon processes when a desktop service is available", async () => {
 		const dbusAddress = process.env.DBUS_SESSION_BUS_ADDRESS;
 		if (!dbusAddress) return;

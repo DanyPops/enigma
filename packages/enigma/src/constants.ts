@@ -2,6 +2,8 @@ export const STATE_DIRECTORY_NAME = "enigma";
 export const DATABASE_FILENAME = "enigma.sqlite";
 export const TOKEN_FILENAME = "token";
 export const HANDLE_FILENAME = "handle.json";
+/** Lives alongside handle.json in the same runtime directory -- discoverable the same way, no separate resolution path. */
+export const ADMIN_SOCKET_FILENAME = "admin.sock";
 export const SYSTEMD_UNIT_NAME = "enigma.service";
 
 export const CREDENTIALS_DIRECTORY_NAME = "credentials";
