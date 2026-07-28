@@ -17,14 +17,20 @@
  * can never stall a caller's own startup.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readDaemonHandle, resolveDaemonPaths, type DaemonHandle } from "@danypops/daemon-kit/paths";
+import { connectUnixRpc } from "@danypops/daemon-kit/unix-rpc-client";
 import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
 
 const ENIGMA_STATE_DIRECTORY_NAME = "enigma";
 const ENIGMA_HANDLE_FILENAME = "handle.json";
 const ENIGMA_TOKEN_FILENAME = "token";
+/** Sibling to handle.json in the same directory -- mirrors Enigma's own daemon.ts (ADMIN_SOCKET_FILENAME), duplicated deliberately: this package never imports Enigma's own source, same rationale as duplicating the handle/token filenames above. */
+const ENIGMA_ADMIN_SOCKET_FILENAME = "admin.sock";
+/** Placeholder authority for the Unix-socket transport -- the host is meaningless once request framing goes over a Unix socket instead of TCP (see daemon-kit's own unix-rpc-client.ts), never actually dialed. */
+const UNIX_TRANSPORT_BASE_URL = "http://enigma.local";
 const ENIGMA_LOOKUP_TIMEOUT_MS = 500;
+const ENIGMA_UNIX_LOOKUP_TIMEOUT_MS = 500;
 /**
  * Enigma is typically a system-level service (unlike a same-user daemon), so its
  * handle can live outside any one process's own $XDG_RUNTIME_DIR. Exported so
@@ -72,7 +78,8 @@ function resolveToken(opts: TryEnigmaCredentialOptions, tokenPath: string): stri
 
 interface ConnectedVault {
 	baseUrl: string;
-	token: string;
+	/** Absent for the Unix-socket transport -- SO_PEERCRED needs no bearer credential at all. */
+	token?: string;
 	fetchImpl: typeof fetch;
 }
 
@@ -89,12 +96,47 @@ export function resolveHandle(primaryPath: string, fallbackPath: string): Daemon
 	return readDaemonHandle(primaryPath) ?? readDaemonHandle(fallbackPath);
 }
 
+/**
+ * Resolves the admin Unix socket's path, if Enigma is actually listening on
+ * one -- same primary-then-fallback directory preference as resolveHandle,
+ * since the socket is always a sibling of that directory's handle.json.
+ * Returns undefined (never throws) when neither candidate exists: an older
+ * Enigma with no Unix-socket support at all, or one simply not running,
+ * look identical from here -- both fall through to the TCP path below.
+ */
+export function resolveAdminSocketPath(primaryHandlePath: string, fallbackHandlePath: string): string | undefined {
+	const primarySocket = join(dirname(primaryHandlePath), ENIGMA_ADMIN_SOCKET_FILENAME);
+	if (existsSync(primarySocket)) return primarySocket;
+	const fallbackSocket = join(dirname(fallbackHandlePath), ENIGMA_ADMIN_SOCKET_FILENAME);
+	if (existsSync(fallbackSocket)) return fallbackSocket;
+	return undefined;
+}
+
 function connect(opts: TryEnigmaCredentialOptions): ConnectedVault | undefined {
 	const env = opts.env ?? process.env;
 	const paths = resolveDaemonPaths(
 		{ stateDirectoryName: ENIGMA_STATE_DIRECTORY_NAME, handleFilename: ENIGMA_HANDLE_FILENAME, tokenFilename: ENIGMA_TOKEN_FILENAME, databaseFilename: "", systemdUnitName: "" },
 		{ env },
 	);
+
+	// Unix socket first, whenever Enigma is new enough to be serving one: kernel-verified
+	// peer identity (SO_PEERCRED) needs no token at all, so a same-uid caller registered
+	// via `enigma client add --uid` (or the operator's own uid, granted full admin) never
+	// has to hold, store, or risk leaking any credential material just to reach the vault.
+	// An explicitly passed opts.token still always wins the TCP path below, but is simply
+	// irrelevant here -- the transport itself is the proof of identity, not a header.
+	const unixSocketPath = resolveAdminSocketPath(paths.handle, ENIGMA_SYSTEM_RUNTIME_HANDLE);
+	if (unixSocketPath) {
+		// connectUnixRpc's own transport takes a real Request, not the (url, init) pair getJson
+		// calls fetchImpl with (that shape matches plain fetch, not this transport) -- adapted
+		// here rather than changing getJson's call convention, since real fetch is still what
+		// every other caller of TryEnigmaCredentialOptions.fetchImpl (tests, future callers) expects.
+		const transport = connectUnixRpc({ path: unixSocketPath, timeoutMs: ENIGMA_UNIX_LOOKUP_TIMEOUT_MS });
+		const fetchImpl: typeof fetch = ((input: string | URL | Request, init?: RequestInit) =>
+			transport(input instanceof Request ? input : new Request(input instanceof URL ? input.href : input, init))) as typeof fetch;
+		return { baseUrl: UNIX_TRANSPORT_BASE_URL, fetchImpl };
+	}
+
 	const handle = resolveHandle(paths.handle, ENIGMA_SYSTEM_RUNTIME_HANDLE);
 	if (!handle) return undefined; // Enigma isn't running -- not an error, just not present
 	const token = resolveToken(opts, paths.token);
@@ -104,7 +146,7 @@ function connect(opts: TryEnigmaCredentialOptions): ConnectedVault | undefined {
 
 async function getJson<T>(vault: ConnectedVault, path: string): Promise<T | undefined> {
 	const response = await vault.fetchImpl(`${vault.baseUrl}${path}`, {
-		headers: { authorization: `Bearer ${vault.token}` },
+		headers: vault.token !== undefined ? { authorization: `Bearer ${vault.token}` } : {},
 		signal: AbortSignal.timeout(ENIGMA_LOOKUP_TIMEOUT_MS),
 	});
 	if (!response.ok) return undefined; // 401/403/404/5xx alike -- "nothing usable," never surfaced as an error

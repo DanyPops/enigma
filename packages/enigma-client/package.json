@@ -16,7 +16,7 @@
 		"check": "bun x tsc --noEmit"
 	},
 	"dependencies": {
-		"@danypops/daemon-kit": "^0.13.0"
+		"@danypops/daemon-kit": "^0.18.0"
 	},
 	"devDependencies": {
 		"bun-types": "latest",

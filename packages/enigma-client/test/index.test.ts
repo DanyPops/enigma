@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveHandle, tryEnigmaAccessToken, tryEnigmaCredential, tryEnigmaWhoAmI } from "../src/index.ts";
+import { serveUnixRpc } from "@danypops/daemon-kit/unix-rpc-server";
+import { resolveAdminSocketPath, resolveHandle, tryEnigmaAccessToken, tryEnigmaCredential, tryEnigmaWhoAmI } from "../src/index.ts";
 
 function tmpXdg(): { dir: string; env: { XDG_RUNTIME_DIR: string; XDG_STATE_HOME: string } } {
 	const dir = mkdtempSync(join(tmpdir(), "enigma-client-"));
@@ -224,6 +225,191 @@ describe("resolveHandle: system-wide fallback for a production Enigma not scoped
 		try {
 			expect(resolveHandle(join(dir, "a", "handle.json"), join(dir, "b", "handle.json"))).toBeNull();
 		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("resolveAdminSocketPath", () => {
+	it("resolves undefined when no socket exists at either candidate directory", () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-client-socket-"));
+		try {
+			expect(resolveAdminSocketPath(join(dir, "primary", "handle.json"), join(dir, "fallback", "handle.json"))).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("prefers the primary directory's socket over the fallback's", () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-client-socket-"));
+		try {
+			mkdirSync(join(dir, "primary"), { recursive: true });
+			mkdirSync(join(dir, "fallback"), { recursive: true });
+			writeFileSync(join(dir, "primary", "admin.sock"), "");
+			writeFileSync(join(dir, "fallback", "admin.sock"), "");
+			expect(resolveAdminSocketPath(join(dir, "primary", "handle.json"), join(dir, "fallback", "handle.json"))).toBe(join(dir, "primary", "admin.sock"));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("falls back to the system-wide socket when only it exists", () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-client-socket-"));
+		try {
+			mkdirSync(join(dir, "fallback"), { recursive: true });
+			writeFileSync(join(dir, "fallback", "admin.sock"), "");
+			expect(resolveAdminSocketPath(join(dir, "primary", "handle.json"), join(dir, "fallback", "handle.json"))).toBe(join(dir, "fallback", "admin.sock"));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("tryEnigmaCredential over the Unix-socket transport", () => {
+	it("fetches a real credential over a real Unix socket, needing no token at all -- SO_PEERCRED, not a bearer header, is the identity proof", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		const socketPath = join(handleDir, "admin.sock");
+		const server = serveUnixRpc({
+			path: socketPath,
+			handler: async (request) => {
+				// No Authorization header at all is sent over this transport -- confirms
+				// the client never fabricates or forwards a bearer credential here.
+				expect(request.headers.get("authorization")).toBeNull();
+				if (new URL(request.url).pathname === "/creds/github") {
+					return new Response(JSON.stringify({ accessToken: "unix-socket-token" }), { headers: { "content-type": "application/json" } });
+				}
+				return new Response("not found", { status: 404 });
+			},
+		});
+		try {
+			// Deliberately no handle.json and no token file at all -- the Unix socket
+			// path never needs either to succeed.
+			const result = await tryEnigmaCredential("github", { env });
+			expect(result).toEqual({ accessToken: "unix-socket-token" });
+
+			const bare = await tryEnigmaAccessToken("github", { env });
+			expect(bare).toBe("unix-socket-token");
+		} finally {
+			server.stop();
+			try {
+				unlinkSync(socketPath);
+			} catch {}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("prefers the Unix socket over a simultaneously-configured TCP handle + token", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		const stateDir = join(env.XDG_STATE_HOME, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		mkdirSync(stateDir, { recursive: true });
+
+		// A live, correctly-configured TCP+bearer-token path that would happily answer --
+		// proves the socket is genuinely preferred, not just the only reachable option.
+		const tcpServer = Bun.serve({ port: 0, fetch: () => new Response(JSON.stringify({ accessToken: "tcp-token" }), { headers: { "content-type": "application/json" } }) });
+		writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: tcpServer.port, pid: process.pid }));
+		writeFileSync(join(stateDir, "token"), "fixture-enigma-bearer\n");
+
+		const socketPath = join(handleDir, "admin.sock");
+		const unixServer = serveUnixRpc({
+			path: socketPath,
+			handler: async () => new Response(JSON.stringify({ accessToken: "unix-token" }), { headers: { "content-type": "application/json" } }),
+		});
+		try {
+			const result = await tryEnigmaCredential("github", { env });
+			expect(result).toEqual({ accessToken: "unix-token" });
+		} finally {
+			unixServer.stop();
+			tcpServer.stop(true);
+			try {
+				unlinkSync(socketPath);
+			} catch {}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("falls through to the TCP+bearer-token path when no Unix socket exists (older Enigma, or none running)", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		const stateDir = join(env.XDG_STATE_HOME, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		mkdirSync(stateDir, { recursive: true });
+
+		const server = Bun.serve({
+			port: 0,
+			fetch: (request) => (request.headers.get("authorization") === "Bearer fixture-enigma-bearer" ? new Response(JSON.stringify({ accessToken: "tcp-fallback-token" }), { headers: { "content-type": "application/json" } }) : new Response("unauthorized", { status: 401 })),
+		});
+		writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: server.port, pid: process.pid }));
+		writeFileSync(join(stateDir, "token"), "fixture-enigma-bearer\n");
+		// Deliberately no admin.sock written -- proves the fallback still works end to end.
+		try {
+			const result = await tryEnigmaCredential("github", { env });
+			expect(result).toEqual({ accessToken: "tcp-fallback-token" });
+		} finally {
+			server.stop(true);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves undefined, never throws, when the Unix socket file exists but nothing is listening on it (stale leftover)", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		writeFileSync(join(handleDir, "admin.sock"), ""); // a plain leftover file, not a live listener
+		try {
+			expect(await tryEnigmaCredential("github", { env })).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("an explicitly passed fetchImpl always wins, even when a real Unix socket is present -- an explicit transport override must never be silently superseded by auto-detection", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		const socketPath = join(handleDir, "admin.sock");
+		// A real, live Unix socket that would happily answer -- proves the override is genuine, not just untested absence.
+		const unixServer = serveUnixRpc({ path: socketPath, handler: async () => new Response(JSON.stringify({ accessToken: "unix-token" }), { headers: { "content-type": "application/json" } }) });
+		try {
+			let calls = 0;
+			const fetchImpl: typeof fetch = (async () => {
+				calls++;
+				return new Response(JSON.stringify({ accessToken: "injected-token" }), { headers: { "content-type": "application/json" } });
+			}) as typeof fetch;
+
+			const result = await tryEnigmaCredential("github", { env, fetchImpl });
+			expect(result).toEqual({ accessToken: "injected-token" });
+			expect(calls).toBe(1);
+		} finally {
+			unixServer.stop();
+			try {
+				unlinkSync(socketPath);
+			} catch {}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("tryEnigmaWhoAmI over the Unix-socket transport", () => {
+	it("resolves this client's real scope over the socket, no token involved", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		const socketPath = join(handleDir, "admin.sock");
+		const server = serveUnixRpc({
+			path: socketPath,
+			handler: async (request) => (new URL(request.url).pathname === "/whoami" ? new Response(JSON.stringify({ name: "pipes", backends: ["github", "gitlab"] }), { headers: { "content-type": "application/json" } }) : new Response("not found", { status: 404 })),
+		});
+		try {
+			expect(await tryEnigmaWhoAmI({ env })).toEqual({ name: "pipes", backends: ["github", "gitlab"] });
+		} finally {
+			server.stop();
+			try {
+				unlinkSync(socketPath);
+			} catch {}
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
