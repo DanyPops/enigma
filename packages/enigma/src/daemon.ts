@@ -42,7 +42,7 @@ export function serveMain(): void {
 	const token = ensureAuthToken(paths.token, "Enigma");
 	const { vault, extra } = buildVault();
 	const clients = createClientRegistry(extra.clientRegistryFile);
-	const deps = { vault, token, clients };
+	const deps = { vault, token, clients, logger };
 
 	// World-connectable: any OS user's process may attempt to connect (SO_PEERCRED verifies
 	// who they actually are afterward, which a file permission bit can't do more precisely

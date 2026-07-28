@@ -5,6 +5,7 @@
  * registered backends) and GET /whoami (its own name + backend list).
  */
 import { errorResponse, extractBearerToken, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "@danypops/daemon-kit/http";
+import type { Logger } from "@danypops/daemon-kit/logging";
 import type { PeerCredential } from "@danypops/daemon-kit/unix-peer-cred";
 import { normalizeBackendName } from "./backend-env-mapping.ts";
 import { resolveRefreshFn } from "./backend-refresh.ts";
@@ -19,6 +20,14 @@ export interface ServerDeps {
 	clients: ClientRegistry;
 	/** Test-only injection point; production leaves this unset and uses global fetch. */
 	fetchImpl?: OidcFetch;
+	/**
+	 * Every credential read/rotate/revoke is audit-logged when this is
+	 * supplied -- matching a real secrets manager's own audit-device model
+	 * (who accessed what, when, outcome), not just a redacted UI. Optional so
+	 * existing tests constructing ServerDeps without one keep working; a
+	 * production daemon should always supply the real logger.
+	 */
+	logger?: Logger;
 }
 
 /**
@@ -30,13 +39,30 @@ export interface ServerDeps {
  * header (if it even sent one) is never consulted -- identity comes only
  * from what the transport itself already verified.
  */
-type Identity = { kind: "admin" } | { kind: "client"; registration: ClientRegistration } | { kind: "none" };
+type Identity = { kind: "admin"; uid?: number } | { kind: "client"; registration: ClientRegistration; uid?: number } | { kind: "none" };
 
 function identityFromBearer(request: Request, deps: ServerDeps): Identity {
 	if (requireBearerToken(request, deps.token)) return { kind: "admin" };
 	const presented = extractBearerToken(request);
 	const client = presented ? deps.clients.authenticate(presented) : undefined;
 	return client ? { kind: "client", registration: client } : { kind: "none" };
+}
+
+/** Never includes credential material -- only who (kind/name/uid), never what value they got back. */
+function auditIdentity(identity: Identity): Record<string, unknown> {
+	if (identity.kind === "none") return { identity: "none" };
+	const uidField = identity.uid !== undefined ? { uid: identity.uid } : {};
+	return identity.kind === "admin" ? { identity: "admin", ...uidField } : { identity: "client", client: identity.registration.name, ...uidField };
+}
+
+/**
+ * Structured audit trail for every credential read/rotate/revoke -- matching
+ * a real secrets manager's own audit-device model (who touched what secret,
+ * when, and what happened), not merely a redacted display. Never logs the
+ * credential value itself, only the fact and outcome of the access.
+ */
+function auditCredentialEvent(deps: ServerDeps, event: string, backend: string, identity: Identity, outcome: "ok" | "denied" | "not_found" | "unauthenticated"): void {
+	deps.logger?.info(event, { backend, outcome, ...auditIdentity(identity) });
 }
 
 /** Case-insensitive: a backend name is a lookup key, not display text (see normalizeBackendName). */
@@ -56,16 +82,24 @@ async function handleRequest(request: Request, deps: ServerDeps, identity: Ident
 	const credsBackend = pathBackend(url.pathname, "/creds/");
 	if (request.method === "GET" && credsBackend) {
 		if (!isAdmin) {
-			if (identity.kind !== "client") return errorResponse("missing or invalid bearer token", 401);
+			if (identity.kind !== "client") {
+				auditCredentialEvent(deps, "credential_access", credsBackend, identity, "unauthenticated");
+				return errorResponse("missing or invalid bearer token", 401);
+			}
 			// Normalized again here, not just at registration time: an already-registered
 			// client's stored backends predate this normalization and may still carry
 			// whatever casing was typed at `enigma client add` time.
 			if (!identity.registration.backends.map(normalizeBackendName).includes(credsBackend)) {
+				auditCredentialEvent(deps, "credential_access", credsBackend, identity, "denied");
 				return errorResponse(`client "${identity.registration.name}" is not registered for backend "${credsBackend}"`, 403);
 			}
 		}
 		const credential = deps.vault.get(credsBackend);
-		if (!credential) return errorResponse(`no credential stored for backend "${credsBackend}"`, 404);
+		if (!credential) {
+			auditCredentialEvent(deps, "credential_access", credsBackend, identity, "not_found");
+			return errorResponse(`no credential stored for backend "${credsBackend}"`, 404);
+		}
+		auditCredentialEvent(deps, "credential_access", credsBackend, identity, "ok");
 		return jsonResponse(credential);
 	}
 
@@ -95,14 +129,22 @@ async function handleRequest(request: Request, deps: ServerDeps, identity: Ident
 	const rotateBackend = pathBackend(url.pathname, "/rotate/");
 	if (request.method === "POST" && rotateBackend) {
 		const current = deps.vault.get(rotateBackend);
-		if (!current) return errorResponse(`no credential stored for backend "${rotateBackend}"`, 404);
+		if (!current) {
+			auditCredentialEvent(deps, "credential_rotate", rotateBackend, identity, "not_found");
+			return errorResponse(`no credential stored for backend "${rotateBackend}"`, 404);
+		}
 		const refresh = resolveRefreshFn(current, deps.fetchImpl);
-		if (!refresh) return errorResponse(`backend "${rotateBackend}" has no refresh function configured`, 400);
+		if (!refresh) {
+			auditCredentialEvent(deps, "credential_rotate", rotateBackend, identity, "denied");
+			return errorResponse(`backend "${rotateBackend}" has no refresh function configured`, 400);
+		}
 		try {
 			const refreshed = await refresh(current);
 			deps.vault.save(rotateBackend, refreshed);
+			auditCredentialEvent(deps, "credential_rotate", rotateBackend, identity, "ok");
 			return new Response(null, { status: 204 });
 		} catch (error) {
+			auditCredentialEvent(deps, "credential_rotate", rotateBackend, identity, "denied");
 			return errorResponse(error instanceof Error ? error.message : String(error), 502);
 		}
 	}
@@ -110,6 +152,7 @@ async function handleRequest(request: Request, deps: ServerDeps, identity: Ident
 	const revokeBackend = pathBackend(url.pathname, "/revoke/");
 	if (request.method === "POST" && revokeBackend) {
 		deps.vault.delete(revokeBackend);
+		auditCredentialEvent(deps, "credential_revoke", revokeBackend, identity, "ok");
 		return new Response(null, { status: 204 });
 	}
 
@@ -138,10 +181,10 @@ export function createUnixSocketHandler(deps: ServerDeps, options: UnixSocketIde
 	return (request: Request, peer: PeerCredential): Promise<Response> => {
 		const identity: Identity =
 			options.adminUid !== undefined && peer.uid === options.adminUid
-				? { kind: "admin" }
+				? { kind: "admin", uid: peer.uid }
 				: (() => {
 						const registration = deps.clients.authenticateByUid(peer.uid);
-						return registration ? ({ kind: "client", registration } as const) : ({ kind: "none" } as const);
+						return registration ? ({ kind: "client", registration, uid: peer.uid } as const) : ({ kind: "none" } as const);
 					})();
 		return handleRequest(request, deps, identity);
 	};

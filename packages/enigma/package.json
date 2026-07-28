@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/enigma",
-	"version": "0.18.0",
+	"version": "0.19.0",
 	"license": "MIT",
 	"description": "Encrypted credential vault daemon: holds delegated OAuth/API credentials, serves each registered consumer only its own scoped credentials over an authenticated local endpoint",
 	"type": "module",

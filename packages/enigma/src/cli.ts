@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { openInBrowser } from "./browser-launcher.ts";
-import { connectEnigmaClient } from "./client.ts";
+import { connectEnigmaClient, type EnigmaAdminClient } from "./client.ts";
 import { ClientAlreadyRegisteredError, ClientNotFoundError, createClientRegistry, UidAlreadyBoundError } from "./client-registry.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import { serveMain } from "./daemon.ts";
@@ -225,6 +225,31 @@ async function revokeMain(backend: string | undefined): Promise<void> {
 	console.log(`${backend} credential revoked.`);
 }
 
+/**
+ * Deliberately the one place Enigma prints a real credential value --
+ * matching a real secrets manager's own "yes, you can read it" model
+ * (HashiCorp Vault's `vault kv get`): the admin token already permits this
+ * exact read via GET /creds/:backend, this just gives it a first-class
+ * command instead of a raw curl+jq workaround. Goes through the same
+ * connectEnigmaClient() path rotate/revoke already use, so it's covered by
+ * the same audit logging on the server side -- never a silent bypass.
+ * CLI-only, human-terminal use: never wired into the pi extension's
+ * /secrets command, which stays redacted for the AI-agent-facing surface.
+ */
+export async function showMain(backend: string | undefined, connect: () => EnigmaAdminClient = connectEnigmaClient): Promise<void> {
+	if (!backend) {
+		console.error("usage: enigma show <backend>");
+		process.exit(1);
+	}
+	const credential = await connect().getCredentials(backend);
+	if (!credential) {
+		console.error(`no credential stored for backend "${backend}"`);
+		process.exit(1);
+	}
+	console.error(`Printing the real, decrypted "${backend}" credential -- this will end up in shell history/scrollback.`);
+	console.log(JSON.stringify(credential, null, 2));
+}
+
 async function listMain(): Promise<void> {
 	const keys = await connectEnigmaClient().listCredentialKeys();
 	console.log(JSON.stringify(keys));
@@ -319,61 +344,69 @@ async function clientMain(args: string[]): Promise<void> {
 	}
 }
 
-try {
-	switch (command) {
-		case "serve":
-			serveMain();
-			break;
-		case "login":
-			await loginMain(process.argv[3]);
-			break;
-		case "rotate":
-			await rotateMain(process.argv[3]);
-			break;
-		case "revoke":
-			await revokeMain(process.argv[3]);
-			break;
-		case "list":
-			await listMain();
-			break;
-		case "client":
-			await clientMain(process.argv.slice(3));
-			break;
-		case "health": {
-			try {
-				console.log(JSON.stringify(await connectEnigmaClient().health()));
-			} catch (error) {
-				console.error(error instanceof Error ? error.message : String(error));
-				process.exit(1);
+// Guarded so importing this module for its exports (showMain, in a test) never also
+// runs the CLI dispatch against whatever argv the importing process happens to have.
+if (import.meta.main) {
+	try {
+		switch (command) {
+			case "serve":
+				serveMain();
+				break;
+			case "login":
+				await loginMain(process.argv[3]);
+				break;
+			case "rotate":
+				await rotateMain(process.argv[3]);
+				break;
+			case "revoke":
+				await revokeMain(process.argv[3]);
+				break;
+			case "show":
+				await showMain(process.argv[3]);
+				break;
+			case "list":
+				await listMain();
+				break;
+			case "client":
+				await clientMain(process.argv.slice(3));
+				break;
+			case "health": {
+				try {
+					console.log(JSON.stringify(await connectEnigmaClient().health()));
+				} catch (error) {
+					console.error(error instanceof Error ? error.message : String(error));
+					process.exit(1);
+				}
+				break;
 			}
-			break;
+			default:
+				console.error(
+					"usage: enigma <serve|login|rotate|revoke|show|list|client|health>\n" +
+						"  serve                          serve the vault; every consumer fetches its own credential\n" +
+						"  login <github|gitlab|jenkins>  authenticate and store credentials for a backend\n" +
+						"  login jira [--site <name-or-url>] [--scope <scope>]\n" +
+						"                                 Jira Cloud OAuth 2.0 (3LO), via JIRA_CLIENT_ID/JIRA_CLIENT_SECRET\n" +
+						"  login google [--scope <scope>] Drive/Docs OAuth, via GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET\n" +
+						"  login oidc --name <name> --issuer <url> --client-id <id> [--scope][--env-var]\n" +
+						"                                 generic OIDC device flow for any compliant provider\n" +
+						"  login apikey --name <name> --env-var <VAR_NAME>\n" +
+						"                                 generic static API key, no OAuth (Brave, Tavily, Exa, ...) —\n" +
+						"                                 prompts with input hidden, or set ENIGMA_APIKEY_VALUE non-interactively\n" +
+						"  rotate <backend>               force a refresh of a stored credential\n" +
+						"  revoke <backend>               delete a stored credential\n" +
+						"  show <backend>                 print the real, decrypted credential (audit-logged) -- human terminal use only\n" +
+						"  list                           list backends with a stored credential\n" +
+						"  client <add|rotate|remove|list>\n" +
+						"                                 register a consumer daemon and scope which backends it may fetch\n" +
+						"  health                         talk to a running instance, print status JSON",
+				);
+				process.exit(1);
 		}
-		default:
-			console.error(
-				"usage: enigma <serve|login|rotate|revoke|list|client|health>\n" +
-					"  serve                          serve the vault; every consumer fetches its own credential\n" +
-					"  login <github|gitlab|jenkins>  authenticate and store credentials for a backend\n" +
-					"  login jira [--site <name-or-url>] [--scope <scope>]\n" +
-					"                                 Jira Cloud OAuth 2.0 (3LO), via JIRA_CLIENT_ID/JIRA_CLIENT_SECRET\n" +
-					"  login google [--scope <scope>] Drive/Docs OAuth, via GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET\n" +
-					"  login oidc --name <name> --issuer <url> --client-id <id> [--scope][--env-var]\n" +
-					"                                 generic OIDC device flow for any compliant provider\n" +
-					"  login apikey --name <name> --env-var <VAR_NAME>\n" +
-					"                                 generic static API key, no OAuth (Brave, Tavily, Exa, ...) —\n" +
-					"                                 prompts with input hidden, or set ENIGMA_APIKEY_VALUE non-interactively\n" +
-					"  rotate <backend>               force a refresh of a stored credential\n" +
-					"  revoke <backend>               delete a stored credential\n" +
-					"  list                           list backends with a stored credential\n" +
-					"  client <add|rotate|remove|list>\n" +
-					"                                 register a consumer daemon and scope which backends it may fetch\n" +
-					"  health                         talk to a running instance, print status JSON",
-			);
+	} catch (error) {
+		if (error instanceof MasterKeyFailure) {
+			console.error(error.message);
 			process.exit(1);
+		}
+		throw error;
 	}
-} catch (error) {
-	if (error instanceof MasterKeyFailure) {
-		console.error(error.message);
-		process.exit(1);
-	}
-	throw error;
 }

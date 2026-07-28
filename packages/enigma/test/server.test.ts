@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Logger } from "@danypops/daemon-kit/logging";
 import type { OidcFetch } from "../src/login-command.ts";
 import { createClientRegistry } from "../src/client-registry.ts";
 import { createCredentialVault } from "../src/credential-vault.ts";
@@ -27,6 +28,17 @@ function buildDeps(dir: string) {
 	const vault = createCredentialVault({ dir, masterKey: randomBytes(32) });
 	const clients = createClientRegistry(join(dir, "clients.json"));
 	return { vault, token: TOKEN, clients, fetchImpl: gitlabRefreshFetch };
+}
+
+function fakeLogger(): { logger: Logger; entries: Array<{ msg: string; fields: Record<string, unknown> }> } {
+	const entries: Array<{ msg: string; fields: Record<string, unknown> }> = [];
+	const logger: Logger = {
+		debug: () => {},
+		info: (msg, fields) => entries.push({ msg, fields: fields ?? {} }),
+		warn: () => {},
+		error: () => {},
+	};
+	return { logger, entries };
 }
 
 function withToken(path: string, token: string, init: RequestInit = {}): Request {
@@ -491,6 +503,135 @@ describe("createUnixSocketHandler: identity resolved from a kernel-verified peer
 
 			const clientWhoami = await handler(unauthed("/whoami"), { pid: 1, uid: 2002, gid: 2002 });
 			expect(await clientWhoami.json()).toEqual({ name: "acme-consumer", backends: ["widgetapi"] });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("credential audit logging: every read/rotate/revoke is logged, never the value itself", () => {
+	it("logs a successful GET /creds/:backend as admin, with the outcome and identity but never the credential", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const { logger, entries } = fakeLogger();
+			const deps = { ...buildDeps(dir), logger };
+			deps.vault.save("widgetapi", { accessToken: "super-secret-value", extra: { note: "also secret" } });
+			const app = createApp(deps);
+
+			const response = await app.fetch(authed("/creds/widgetapi"));
+			expect(response.status).toBe(200);
+
+			expect(entries).toEqual([{ msg: "credential_access", fields: { backend: "widgetapi", outcome: "ok", identity: "admin" } }]);
+			// The whole point: no log entry anywhere contains the actual secret value.
+			expect(JSON.stringify(entries)).not.toContain("super-secret-value");
+			expect(JSON.stringify(entries)).not.toContain("also secret");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("logs 'not_found' when the backend has no stored credential", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const { logger, entries } = fakeLogger();
+			const app = createApp({ ...buildDeps(dir), logger });
+
+			await app.fetch(authed("/creds/nothing-here"));
+
+			expect(entries).toEqual([{ msg: "credential_access", fields: { backend: "nothing-here", outcome: "not_found", identity: "admin" } }]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("logs 'unauthenticated' for a request with no valid bearer token at all", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const { logger, entries } = fakeLogger();
+			const app = createApp({ ...buildDeps(dir), logger });
+
+			await app.fetch(new Request("http://enigma.local/creds/widgetapi"));
+
+			expect(entries).toEqual([{ msg: "credential_access", fields: { backend: "widgetapi", outcome: "unauthenticated", identity: "none" } }]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("logs 'denied' for a registered client requesting a backend outside its own scope, naming the client", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const { logger, entries } = fakeLogger();
+			const deps = { ...buildDeps(dir), logger };
+			const clientToken = deps.clients.add("acme-consumer", ["widgetapi"]);
+			const app = createApp(deps);
+
+			await app.fetch(withToken("/creds/other-backend", clientToken));
+
+			expect(entries).toEqual([{ msg: "credential_access", fields: { backend: "other-backend", outcome: "denied", identity: "client", client: "acme-consumer" } }]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("logs credential_revoke on a successful revoke", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const { logger, entries } = fakeLogger();
+			const deps = { ...buildDeps(dir), logger };
+			deps.vault.save("widgetapi", { accessToken: "secret" });
+			const app = createApp(deps);
+
+			await app.fetch(authed("/revoke/widgetapi", { method: "POST" }));
+
+			expect(entries).toEqual([{ msg: "credential_revoke", fields: { backend: "widgetapi", outcome: "ok", identity: "admin" } }]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("logs credential_rotate on a successful rotate", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const { logger, entries } = fakeLogger();
+			const deps = { ...buildDeps(dir), logger };
+			deps.vault.save("gitlab", { accessToken: "old-token", refreshToken: "refresh-me", extra: { baseUrl: "https://gitlab.example.com", clientId: "c" } });
+			const app = createApp(deps);
+
+			const response = await app.fetch(authed("/rotate/gitlab", { method: "POST" }));
+			expect(response.status).toBe(204);
+
+			expect(entries).toEqual([{ msg: "credential_rotate", fields: { backend: "gitlab", outcome: "ok", identity: "admin" } }]);
+			expect(JSON.stringify(entries)).not.toContain("old-token");
+			expect(JSON.stringify(entries)).not.toContain("refresh-me");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("includes the kernel-verified peer uid when the access came over the unix transport", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const { logger, entries } = fakeLogger();
+			const deps = { ...buildDeps(dir), logger };
+			deps.vault.save("widgetapi", { accessToken: "secret" });
+			const handler = createUnixSocketHandler(deps, { adminUid: 1001 });
+
+			await handler(new Request("http://enigma.local/creds/widgetapi"), { pid: 1, uid: 1001, gid: 1001 });
+
+			expect(entries).toEqual([{ msg: "credential_access", fields: { backend: "widgetapi", outcome: "ok", identity: "admin", uid: 1001 } }]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("emits no log entries at all when no logger is supplied -- optional, not required", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const app = createApp(buildDeps(dir));
+			// No logger in deps -- must not throw.
+			const response = await app.fetch(authed("/creds/nothing-here"));
+			expect(response.status).toBe(404);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

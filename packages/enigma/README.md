@@ -144,9 +144,38 @@ enigma login apikey --name <name> --env-var <VAR_NAME>
                                   prompts with input hidden, or set ENIGMA_APIKEY_VALUE non-interactively
 enigma rotate <backend>           force a refresh of a stored credential
 enigma revoke <backend>           delete a stored credential
+enigma show <backend>             print the real, decrypted credential -- human terminal use only
 enigma list                       list backends with a stored credential
 enigma health                     talk to a running instance, print status JSON
 ```
+
+### Viewing a real credential value
+
+Every other surface (`enigma list`, `/secrets` in pi) is deliberately
+redacted -- names and status only, never the value. `enigma show <backend>`
+is the one place a raw value is printed, for the same reason a mature
+secrets manager like HashiCorp Vault still lets an operator `vault kv get`
+a secret: restricting the admin-token holder from ever reading their own
+vault's contents isn't a real access boundary (the admin token already
+permits an equivalent read via `GET /creds/:backend`), it's just missing
+ergonomics. `enigma show` goes through that same authenticated path, so it
+is covered by the same audit logging every credential read gets (see
+below) -- not a silent bypass.
+
+This command is CLI-only, for a human at a real terminal. It is never
+wired into the pi extension's `/secrets` command, which stays redacted --
+that surface sits inside an AI agent session, where the model itself (not
+just the human who typed the command) can end up reading whatever the
+command renders.
+
+### Audit logging
+
+Every `GET /creds/:backend`, `POST /rotate/:backend`, and `POST
+/revoke/:backend` is logged -- backend name, resolved identity (admin, or
+a registered client's name/uid), and outcome (`ok`/`denied`/`not_found`/
+`unauthenticated`) -- matching a real secrets manager's own audit-device
+model. The credential value itself is never logged, only the fact and
+outcome of the access.
 
 ### Multiple accounts on the same platform
 
@@ -309,13 +338,17 @@ Testing status, independent of rotation).
 
 The `secrets` slash command manages the vault from inside [pi](https://pi.dev):
 list configured backends, view redacted status (expiry/scope, never the
-token), rotate, or revoke. Enabled automatically once this package is
+token), rotate, or revoke -- also usable from `/secrets`' [services] menu
+for any other daemon-kit consumer sharing that command in the same
+session (pipes, tickets). Enabled automatically once this package is
 installed as a pi extension (`pi.extensions` in `package.json`); talks to
 the same running `enigma serve`/`enigma supervisor` daemon the CLI does.
 Never returns `accessToken`/`refreshToken`/`extra` to the command output --
-see `extension/src/redact.ts`. Login stays CLI-only (`enigma login
-<backend>`); it's an interactive device-flow prompt, not something a slash
-command or LLM tool call can drive.
+see `src/secrets-backend-adapter.ts`'s explicit SecretRecord allow-list.
+Login stays CLI-only (`enigma login <backend>`); it's an interactive
+device-flow prompt, not something a slash command or LLM tool call can
+drive. `enigma show <backend>` (above) is the one place a raw value is
+printed, and it stays CLI-only for the same reason.
 
 ## Supervisor config
 
