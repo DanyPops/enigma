@@ -25,8 +25,13 @@ const ENIGMA_STATE_DIRECTORY_NAME = "enigma";
 const ENIGMA_HANDLE_FILENAME = "handle.json";
 const ENIGMA_TOKEN_FILENAME = "token";
 const ENIGMA_LOOKUP_TIMEOUT_MS = 500;
-/** Enigma is typically a system-level service (unlike a same-user daemon), so its handle can live outside any one process's own $XDG_RUNTIME_DIR. */
-const ENIGMA_SYSTEM_RUNTIME_HANDLE = join("/run", ENIGMA_STATE_DIRECTORY_NAME, ENIGMA_HANDLE_FILENAME);
+/**
+ * Enigma is typically a system-level service (unlike a same-user daemon), so its
+ * handle can live outside any one process's own $XDG_RUNTIME_DIR. Exported so
+ * Enigma's own admin CLI (client.ts, a different consumer of this same discovery
+ * problem) can reuse the identical fallback path rather than a second copy of it.
+ */
+export const ENIGMA_SYSTEM_RUNTIME_HANDLE = join("/run", ENIGMA_STATE_DIRECTORY_NAME, ENIGMA_HANDLE_FILENAME);
 
 /** Identical shape to RefreshableAccessToken -- Enigma always hands back a credential, never a bare token. */
 export type VaultCredential = RefreshableAccessToken;
