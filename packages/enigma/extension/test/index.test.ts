@@ -11,12 +11,13 @@
  * behavior daemon-kit's own secrets-tui.test.ts already owns.
  */
 import { describe, expect, it } from "bun:test";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
 import { SECRETS_MENU } from "@danypops/daemon-kit/secrets-tui";
+import { __resetSecretsRegistryForTests, listSecretsContributors } from "@danypops/daemon-kit/secrets-registry";
 import type { EnigmaAdminClient, VaultCredential } from "../../src/client.ts";
 import type { CredentialVault } from "../../src/credential-vault.ts";
-import { LOGIN_ACTION, loginBackendFlow, type LoginFns, runSecretsCommand, type PickFromList } from "../src/index.ts";
+import { buildEnigmaSecretsContribution, default as enigmaExtension, LOGIN_ACTION, loginBackendFlow, type LoginFns, runSecretsCommand, type PickFromList } from "../src/index.ts";
 
 const REAL_LOOKING_TOKEN = "ghp_1234567890abcdefghijklmnopqrstuvwxyz12";
 const FIXTURE_JENKINS_TOKEN = "jenkins-fixture-token-not-real";
@@ -141,18 +142,26 @@ function fakeLoginFns(overrides: Partial<LoginFns> = {}): LoginFns & { calls: Re
 // ── runSecretsCommand: Enigma-specific pre-flight + wiring, thin ───────────
 
 describe("runSecretsCommand: pre-flight (Enigma-specific, not covered by daemon-kit's own tests)", () => {
-	it("reports a clear error and stops when the daemon isn't running, without throwing", async () => {
+	// connect() is lazy (see buildEnigmaSecretsContribution's own doc comment): a
+	// contribution is merged with every other /secrets consumer's before any menu
+	// renders, so a connection failure must surface through the same per-backend
+	// SecretsBackendListError path every other backend failure already goes
+	// through -- not an eager, whole-command-blocking pre-flight check, which
+	// would take tickets' and pipes' otherwise-working secrets down with it.
+
+	it("reports a clear error, scoped to the enigma backend, when the daemon isn't running -- surfaced once [secrets] is actually opened, not before", async () => {
 		const { ctx, notifications } = fakeCtx();
 		const connect = () => {
 			throw new Error("Enigma daemon is not running; run `enigma serve` or `enigma supervisor`.");
 		};
-		await runSecretsCommand(ctx, connect, scriptedPick());
+		await runSecretsCommand(ctx, connect, scriptedPick(SECRETS_MENU, null));
 		expect(notifications).toHaveLength(1);
 		expect(notifications[0]?.level).toBe("error");
+		expect(notifications[0]?.text).toContain("enigma");
 		expect(notifications[0]?.text).toContain("not running");
 	});
 
-	it("reports a clear error when the vault is unreachable mid-session", async () => {
+	it("reports a clear error when the vault is unreachable mid-session, surfaced the same way", async () => {
 		const { ctx, notifications } = fakeCtx();
 		const client: EnigmaAdminClient = {
 			listCredentialKeys: async () => {
@@ -164,16 +173,28 @@ describe("runSecretsCommand: pre-flight (Enigma-specific, not covered by daemon-
 			listClients: async () => [],
 			health: async () => ({ ok: true, version: "test" }),
 		};
-		await runSecretsCommand(ctx, () => client, scriptedPick());
+		await runSecretsCommand(ctx, () => client, scriptedPick(SECRETS_MENU, null));
 		expect(notifications[0]?.level).toBe("error");
-		expect(notifications[0]?.text).toContain("Could not reach the Enigma vault");
+		expect(notifications[0]?.text).toContain("Could not reach the \"enigma\" backend");
 	});
 
-	it("tells the user to log in when no backends are configured yet", async () => {
+	it("shows only the login entry, with no special notification, when no backends are configured yet", async () => {
 		const { ctx, notifications } = fakeCtx();
 		const client = fakeVaultClient({});
-		await runSecretsCommand(ctx, () => client, scriptedPick());
-		expect(notifications[0]?.text).toContain("enigma login");
+		let seenItems: string[] = [];
+		let steppedPastChooser = false;
+		const pick: PickFromList = async (_ctx, title, items) => {
+			if (title !== "All secrets") {
+				if (steppedPastChooser) return null;
+				steppedPastChooser = true;
+				return SECRETS_MENU;
+			}
+			seenItems = items.map((item) => item.label);
+			return null;
+		};
+		await runSecretsCommand(ctx, () => client, pick);
+		expect(seenItems).toEqual(["+ Log in a backend"]);
+		expect(notifications).toEqual([]);
 	});
 });
 
@@ -403,5 +424,45 @@ describe("loginBackendFlow", () => {
 		expect(vault.saved).toEqual([]);
 		const anyCalled = Object.values(loginFns.calls).some((c) => c.length > 0);
 		expect(anyCalled).toBe(false);
+	});
+});
+
+// ── buildEnigmaSecretsContribution / default export: shared-registry wiring ──
+
+describe("buildEnigmaSecretsContribution", () => {
+	it("returns a backend sourced 'enigma' and a login extraAction, without connecting yet", () => {
+		let connected = false;
+		const connect = () => {
+			connected = true;
+			return fakeVaultClient({});
+		};
+		const contribution = buildEnigmaSecretsContribution(connect);
+		expect(connected).toBe(false); // connect() must stay lazy -- see this function's own doc comment
+		expect(contribution.backends).toHaveLength(1);
+		expect(contribution.backends[0]?.source).toBe("enigma");
+		expect(contribution.extraActions?.map((a) => a.value)).toEqual([LOGIN_ACTION]);
+	});
+
+	it("connects exactly once even when the backend and the servicesRegistry are both used", async () => {
+		let connectCount = 0;
+		const connect = () => {
+			connectCount++;
+			return fakeVaultClient({ github: { accessToken: REAL_LOOKING_TOKEN } });
+		};
+		const contribution = buildEnigmaSecretsContribution(connect);
+		await contribution.backends[0]?.list();
+		await contribution.servicesRegistry?.list();
+		expect(connectCount).toBe(1);
+	});
+});
+
+describe("default export: registers with the shared /secrets registry, not a standalone command", () => {
+	it("registers a contributor sourced 'enigma' via registerSharedSecretsCommand", async () => {
+		__resetSecretsRegistryForTests();
+		const registered: string[] = [];
+		const pi = { registerCommand: (name: string) => registered.push(name) } as unknown as ExtensionAPI;
+		enigmaExtension(pi);
+		expect(registered).toEqual(["secrets"]);
+		expect(listSecretsContributors().map((c) => c.source)).toEqual(["enigma"]);
 	});
 });

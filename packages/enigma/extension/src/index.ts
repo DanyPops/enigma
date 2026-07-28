@@ -17,7 +17,8 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
-import { runSecretsCommand as runGenericSecretsCommand } from "@danypops/daemon-kit/secrets-tui";
+import { registerSharedSecretsCommand, runSecretsCommand as runGenericSecretsCommand, type SecretsContribution } from "@danypops/daemon-kit/secrets-tui";
+import type { SecretsBackend, ServicesRegistry } from "@danypops/daemon-kit/secrets-backend";
 import { type ApiKeyFormResult, ApiKeyRegistrationForm } from "./apikey-form.ts";
 import { defaultEnvVarName } from "../../src/backend-env-mapping.ts";
 import { type BrowserOpener, openInBrowser } from "../../src/browser-launcher.ts";
@@ -288,13 +289,58 @@ export async function loginBackendFlow(
 }
 
 /**
- * Built on daemon-kit's generic /secrets command against a single
- * SecretsBackend wrapping this Enigma vault -- Enigma is one pluggable
- * backend behind that port, not the assumed target, even though this is
- * still Enigma's own extension registering the command for a user with
- * only Enigma running. The device-flow/static-token login menu the generic
- * port deliberately doesn't model is threaded through as an extraAction.
+ * Enigma's own contribution to daemon-kit's shared /secrets namespace --
+ * Enigma is one pluggable backend among possibly several sharing that
+ * command (pipes, tickets), not the assumed target, even on a machine
+ * running only Enigma. The device-flow/static-token login menu the
+ * generic port deliberately doesn't model is threaded through as an
+ * extraAction.
+ *
+ * `connect()` is called lazily, the first time the backend or
+ * servicesRegistry is actually used (list/get/rotate/revoke), not eagerly
+ * here -- a contribution is merged with every other consumer's before any
+ * menu renders (see mergeSecretsContributions), so an eager connect()
+ * throwing here would take down tickets' and pipes' otherwise-working
+ * secrets along with Enigma's. A lazy failure instead surfaces through the
+ * exact same per-backend SecretsBackendListError path every other backend
+ * failure already goes through.
  */
+export function buildEnigmaSecretsContribution(
+	connect: () => EnigmaAdminClient = connectEnigmaClient,
+	pick: PickFromList = pickFromList,
+	buildVault: () => CredentialVault = buildLocalVault,
+	loginFns: LoginFns = defaultLoginFns,
+	browserOpener?: BrowserOpener,
+	promptApiKey: PromptApiKeyForm = promptApiKeyForm,
+): SecretsContribution {
+	let cachedClient: EnigmaAdminClient | undefined;
+	const ensureClient = (): EnigmaAdminClient => {
+		if (!cachedClient) cachedClient = connect();
+		return cachedClient;
+	};
+	const backend: SecretsBackend = {
+		source: "enigma",
+		list: () => createEnigmaSecretsBackend(ensureClient()).list(),
+		get: (name) => createEnigmaSecretsBackend(ensureClient()).get(name),
+		rotate: (name) => createEnigmaSecretsBackend(ensureClient()).rotate(name),
+		revoke: (name) => createEnigmaSecretsBackend(ensureClient()).revoke(name),
+	};
+	const servicesRegistry: ServicesRegistry = { list: () => createEnigmaServicesRegistry(ensureClient()).list() };
+	return {
+		backends: [backend],
+		servicesRegistry,
+		extraActions: [
+			{
+				value: LOGIN_ACTION,
+				label: "+ Log in a backend",
+				description: "Authenticate a new backend, or re-authenticate an existing one",
+				run: (c) => loginBackendFlow(c, buildVault, pick, loginFns, browserOpener, promptApiKey),
+			},
+		],
+	};
+}
+
+/** Standalone entry point kept for direct testing and any caller that wants Enigma's secrets view on its own, outside the shared registry. */
 export async function runSecretsCommand(
 	ctx: ExtensionCommandContext,
 	connect: () => EnigmaAdminClient = connectEnigmaClient,
@@ -304,41 +350,14 @@ export async function runSecretsCommand(
 	browserOpener?: BrowserOpener,
 	promptApiKey: PromptApiKeyForm = promptApiKeyForm,
 ): Promise<void> {
-	let client: EnigmaAdminClient;
-	try {
-		client = connect();
-	} catch (error) {
-		ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-		return;
-	}
-
-	let keys: string[];
-	try {
-		keys = await client.listCredentialKeys();
-	} catch (error) {
-		ctx.ui.notify(`Could not reach the Enigma vault: ${error instanceof Error ? error.message : String(error)}`, "error");
-		return;
-	}
-	if (keys.length === 0) ctx.ui.notify("No backends configured yet. Run `enigma login <backend>` first.", "info");
-
-	await runGenericSecretsCommand(ctx, {
-		backends: [createEnigmaSecretsBackend(client)],
-		servicesRegistry: createEnigmaServicesRegistry(client),
-		pick,
-		extraActions: [
-			{
-				value: LOGIN_ACTION,
-				label: "+ Log in a backend",
-				description: "Authenticate a new backend, or re-authenticate an existing one",
-				run: (c) => loginBackendFlow(c, buildVault, pick, loginFns, browserOpener, promptApiKey),
-			},
-		],
-	});
+	await runGenericSecretsCommand(ctx, { ...buildEnigmaSecretsContribution(connect, pick, buildVault, loginFns, browserOpener, promptApiKey), pick });
 }
 
 export default function (pi: ExtensionAPI): void {
-	pi.registerCommand("secrets", {
-		description: "Manage Enigma-held credentials: view redacted status, rotate, or revoke",
-		handler: async (_args, ctx) => runSecretsCommand(ctx),
-	});
+	// Contributes to the shared /secrets namespace (daemon-kit's
+	// registerSharedSecretsCommand) instead of a standalone command --
+	// pipes and tickets contribute the same way, so whichever of the three
+	// loads first in a given Pi session ends up claiming the real command
+	// registration, and all three still show up in it regardless of order.
+	registerSharedSecretsCommand(pi, { source: "enigma", resolve: () => buildEnigmaSecretsContribution() });
 }
