@@ -10,12 +10,14 @@
  * own daemon.
  *
  * Never surfaces accessToken/refreshToken/extra: every value shown here comes
- * from redactCredentialStatus's explicit allow-list, per the standing rule
- * "Enigma Pi extension: never expose decrypted credential material to the LLM".
+ * from SecretRecord's explicit allow-list (../../src/secrets-backend-adapter.ts),
+ * per the standing rule "Enigma Pi extension: never expose decrypted credential
+ * material to the LLM".
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
+import { runSecretsCommand as runGenericSecretsCommand } from "@danypops/daemon-kit/secrets-tui";
 import { type ApiKeyFormResult, ApiKeyRegistrationForm } from "./apikey-form.ts";
 import { defaultEnvVarName } from "../../src/backend-env-mapping.ts";
 import { type BrowserOpener, openInBrowser } from "../../src/browser-launcher.ts";
@@ -33,7 +35,7 @@ import {
 } from "../../src/login-command.ts";
 import { resolveConfiguredMasterKey } from "../../src/master-key.ts";
 import { resolveEnigmaExtraPaths, resolveEnigmaPaths } from "../../src/paths.ts";
-import { describeCredentialStatus, redactCredentialStatus, type RedactedCredentialStatus } from "./redact.ts";
+import { createEnigmaSecretsBackend } from "../../src/secrets-backend-adapter.ts";
 
 /** Sentinel item value for the persistent "log in" menu entry, distinct from any real backend name. */
 export const LOGIN_ACTION = "__enigma_secrets_login__";
@@ -62,16 +64,6 @@ export interface LoginFns {
 }
 
 const defaultLoginFns: LoginFns = { loginApiKey, loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc };
-
-export async function loadStatuses(client: EnigmaAdminClient): Promise<RedactedCredentialStatus[]> {
-	const backends = await client.listCredentialKeys();
-	const statuses: RedactedCredentialStatus[] = [];
-	for (const backend of backends) {
-		const credential = await client.getCredentials(backend);
-		statuses.push(redactCredentialStatus(backend, credential));
-	}
-	return statuses;
-}
 
 /**
  * Three-field form (name, env var, masked value) for a static API key --
@@ -131,42 +123,6 @@ async function pickFromList(ctx: ExtensionCommandContext, title: string, items: 
 }
 
 export type PickFromList = (ctx: ExtensionCommandContext, title: string, items: SelectItem[], helpText: string) => Promise<string | null>;
-
-async function manageBackend(ctx: ExtensionCommandContext, client: EnigmaAdminClient, backend: string, pick: PickFromList = pickFromList): Promise<void> {
-	for (;;) {
-		const credential = await client.getCredentials(backend);
-		const status = redactCredentialStatus(backend, credential);
-		const items: SelectItem[] = [
-			{ value: "rotate", label: "Rotate", description: "Refresh this credential in place" },
-			{ value: "revoke", label: "Revoke", description: "Delete the stored credential" },
-			{ value: "back", label: "Back" },
-		];
-		const action = await pick(ctx, `${backend} \u2014 ${describeCredentialStatus(status)}`, items, "\u2191\u2193 navigate \u2022 enter select \u2022 esc back");
-		if (!action || action === "back") return;
-
-		if (action === "rotate") {
-			try {
-				await client.rotateCredential(backend);
-				ctx.ui.notify(`${backend}: rotated.`, "info");
-			} catch (error) {
-				ctx.ui.notify(`${backend}: rotate failed (${error instanceof Error ? error.message : String(error)})`, "error");
-			}
-			continue;
-		}
-
-		if (action === "revoke") {
-			const confirmed = ctx.hasUI ? await ctx.ui.confirm(`Revoke ${backend}?`, "This deletes the stored credential. Re-authenticate with `enigma login` to restore it.") : false;
-			if (!confirmed) continue;
-			try {
-				await client.revokeCredential(backend);
-				ctx.ui.notify(`${backend}: revoked.`, "info");
-			} catch (error) {
-				ctx.ui.notify(`${backend}: revoke failed (${error instanceof Error ? error.message : String(error)})`, "error");
-			}
-			return; // nothing left to manage for this backend once revoked
-		}
-	}
-}
 
 function notifyMissingEnv(ctx: ExtensionCommandContext, vars: string, guidance: string): void {
 	ctx.ui.notify(`${vars} required \u2014 ${guidance}.`, "error");
@@ -329,6 +285,14 @@ async function loginBackendFlow(
 	}
 }
 
+/**
+ * Built on daemon-kit's generic /secrets command against a single
+ * SecretsBackend wrapping this Enigma vault -- Enigma is one pluggable
+ * backend behind that port, not the assumed target, even though this is
+ * still Enigma's own extension registering the command for a user with
+ * only Enigma running. The device-flow/static-token login menu the generic
+ * port deliberately doesn't model is threaded through as an extraAction.
+ */
 export async function runSecretsCommand(
 	ctx: ExtensionCommandContext,
 	connect: () => EnigmaAdminClient = connectEnigmaClient,
@@ -346,37 +310,27 @@ export async function runSecretsCommand(
 		return;
 	}
 
-	for (;;) {
-		let statuses: RedactedCredentialStatus[];
-		try {
-			statuses = await loadStatuses(client);
-		} catch (error) {
-			ctx.ui.notify(`Could not reach the Enigma vault: ${error instanceof Error ? error.message : String(error)}`, "error");
-			return;
-		}
-
-		if (statuses.length === 0) {
-			ctx.ui.notify("No backends configured yet. Run `enigma login <backend>` first.", "info");
-		}
-
-		const items: SelectItem[] = [
-			...statuses.map((status) => ({
-				value: status.backend,
-				label: status.backend,
-				description: describeCredentialStatus(status),
-			})),
-			{ value: LOGIN_ACTION, label: "+ Log in a backend", description: "Authenticate a new backend, or re-authenticate an existing one" },
-		];
-		const selected = await pick(ctx, "Enigma secrets", items, "\u2191\u2193 navigate \u2022 enter select \u2022 esc close");
-		if (!selected) return;
-
-		if (selected === LOGIN_ACTION) {
-			await loginBackendFlow(ctx, buildVault, pick, loginFns, browserOpener, promptApiKey);
-			continue;
-		}
-
-		await manageBackend(ctx, client, selected, pick);
+	let keys: string[];
+	try {
+		keys = await client.listCredentialKeys();
+	} catch (error) {
+		ctx.ui.notify(`Could not reach the Enigma vault: ${error instanceof Error ? error.message : String(error)}`, "error");
+		return;
 	}
+	if (keys.length === 0) ctx.ui.notify("No backends configured yet. Run `enigma login <backend>` first.", "info");
+
+	await runGenericSecretsCommand(ctx, {
+		backends: [createEnigmaSecretsBackend(client)],
+		pick,
+		extraActions: [
+			{
+				value: LOGIN_ACTION,
+				label: "+ Log in a backend",
+				description: "Authenticate a new backend, or re-authenticate an existing one",
+				run: (c) => loginBackendFlow(c, buildVault, pick, loginFns, browserOpener, promptApiKey),
+			},
+		],
+	});
 }
 
 export default function (pi: ExtensionAPI): void {

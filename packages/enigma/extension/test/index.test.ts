@@ -3,7 +3,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
 import type { EnigmaAdminClient, VaultCredential } from "../../src/client.ts";
 import type { CredentialVault } from "../../src/credential-vault.ts";
-import { LOGIN_ACTION, type LoginFns, loadStatuses, runSecretsCommand, type PickFromList } from "../src/index.ts";
+import { LOGIN_ACTION, type LoginFns, runSecretsCommand, type PickFromList } from "../src/index.ts";
 
 const REAL_LOOKING_TOKEN = "ghp_1234567890abcdefghijklmnopqrstuvwxyz12";
 const FIXTURE_JENKINS_TOKEN = "jenkins-fixture-token-not-real";
@@ -124,22 +124,6 @@ function fakeLoginFns(overrides: Partial<LoginFns> = {}): LoginFns & { calls: Re
 	} as LoginFns & { calls: Record<string, unknown[]> };
 }
 
-describe("loadStatuses", () => {
-	it("redacts every configured backend, never surfacing the real token", async () => {
-		const client = fakeVaultClient({
-			github: { accessToken: REAL_LOOKING_TOKEN, scope: "repo" },
-			jenkins: { accessToken: REAL_LOOKING_TOKEN, extra: { url: "https://jenkins.example.com" } },
-		});
-		const statuses = await loadStatuses(client);
-		const serialized = JSON.stringify(statuses);
-		expect(serialized).not.toContain(REAL_LOOKING_TOKEN);
-		expect(statuses).toEqual([
-			{ backend: "github", configured: true, scope: "repo" },
-			{ backend: "jenkins", configured: true },
-		]);
-	});
-});
-
 describe("runSecretsCommand", () => {
 	it("reports a clear error and stops when the daemon isn't running, without throwing", async () => {
 		const { ctx, notifications } = fakeCtx();
@@ -180,7 +164,7 @@ describe("runSecretsCommand", () => {
 		const client = fakeVaultClient({ github: { accessToken: REAL_LOOKING_TOKEN } });
 		// pick: 1) choose "github" from the backend list, 2) choose "rotate" from its action menu,
 		// 3) "back" out of the action menu, 4) close the backend list.
-		await runSecretsCommand(ctx, () => client, scriptedPick("github", "rotate", "back", null));
+		await runSecretsCommand(ctx, () => client, scriptedPick("enigma\u0000github", "rotate", "back", null));
 		expect(client.rotated).toEqual(["github"]);
 		expect(notifications.some((n) => n.text === "github: rotated." && n.level === "info")).toBe(true);
 		expect(JSON.stringify(notifications)).not.toContain(REAL_LOOKING_TOKEN);
@@ -192,7 +176,7 @@ describe("runSecretsCommand", () => {
 		client.rotateCredential = async () => {
 			throw new Error("backend \"jenkins\" has no refresh function configured");
 		};
-		await runSecretsCommand(ctx, () => client, scriptedPick("jenkins", "rotate", "back", null));
+		await runSecretsCommand(ctx, () => client, scriptedPick("enigma\u0000jenkins", "rotate", "back", null));
 		const failure = notifications.find((n) => n.level === "error");
 		expect(failure?.text).toContain("rotate failed");
 		expect(failure?.text).toContain("no refresh function configured");
@@ -202,7 +186,7 @@ describe("runSecretsCommand", () => {
 		const { ctx, notifications } = fakeCtx({ confirm: false });
 		const client = fakeVaultClient({ gitlab: { accessToken: REAL_LOOKING_TOKEN } });
 		// Declining the confirm dialog must not revoke; "back" then exits the (still-configured) backend's menu.
-		await runSecretsCommand(ctx, () => client, scriptedPick("gitlab", "revoke", "back", null));
+		await runSecretsCommand(ctx, () => client, scriptedPick("enigma\u0000gitlab", "revoke", "back", null));
 		expect(client.revoked).toEqual([]);
 		expect(notifications.some((n) => n.text.includes("revoked"))).toBe(false);
 	});
@@ -210,7 +194,7 @@ describe("runSecretsCommand", () => {
 	it("revokes when confirmed and reports success", async () => {
 		const { ctx, notifications } = fakeCtx({ confirm: true });
 		const client = fakeVaultClient({ gitlab: { accessToken: REAL_LOOKING_TOKEN } });
-		await runSecretsCommand(ctx, () => client, scriptedPick("gitlab", "revoke", null));
+		await runSecretsCommand(ctx, () => client, scriptedPick("enigma\u0000gitlab", "revoke", null));
 		expect(client.revoked).toEqual(["gitlab"]);
 		expect(notifications.some((n) => n.text === "gitlab: revoked." && n.level === "info")).toBe(true);
 	});

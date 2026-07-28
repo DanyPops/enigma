@@ -7,12 +7,12 @@
     },
     "packages/enigma": {
       "name": "@danypops/enigma",
-      "version": "0.14.1",
+      "version": "0.15.0",
       "bin": {
         "enigma": "src/cli.ts",
       },
       "dependencies": {
-        "@danypops/daemon-kit": "^0.18.0",
+        "@danypops/daemon-kit": "^0.20.2",
         "@danypops/enigma-client": "^0.5.0",
         "@napi-rs/keyring": "^1.3.0",
         "open": "^11.0.0",
@@ -93,7 +93,7 @@
 
     "@babel/runtime": ["@babel/runtime@7.29.7", "", {}, "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw=="],
 
-    "@danypops/daemon-kit": ["@danypops/daemon-kit@0.18.0", "", { "dependencies": { "pino": "^10.3.1" }, "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "typescript": "^5" }, "optionalPeers": ["@earendil-works/pi-coding-agent"] }, "sha512-952ilZHgDBqGCSJ2F58Bdrcgom06+2pVFHIJjh7yvgmjUoEEWCEftgFat0y25i6RdLR7LOl8qScZlVs0Rn8osQ=="],
+    "@danypops/daemon-kit": ["@danypops/daemon-kit@0.20.2", "", { "dependencies": { "pino": "^10.3.1" }, "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*", "typescript": "^5" }, "optionalPeers": ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"] }, "sha512-dsayxrLQIn1G60RJt+hYzxIwWOVYqaLH7ReXptNq+kelHI0t+RxeR6zZ9cYHMdc8SVT23wHKcqVcEIOqt6V/UQ=="],
 
     "@danypops/enigma": ["@danypops/enigma@workspace:packages/enigma"],
 
@@ -402,6 +402,8 @@
     "@aws-sdk/credential-provider-sso/@aws-sdk/token-providers": ["@aws-sdk/token-providers@3.1096.0", "", { "dependencies": { "@aws-sdk/core": "^3.977.1", "@aws-sdk/nested-clients": "^3.997.36", "@aws-sdk/types": "^3.974.2", "@smithy/core": "^3.29.8", "@smithy/types": "^4.16.1", "tslib": "^2.6.2" } }, "sha512-hdUS2hDppy3vkWeFl5y86RLNU6OWH2mQB09yOSsRefwhhGTSFPkaZvfLDD/9vFcvMzlr8QFQFw3fw2FtrurVQA=="],
 
     "@aws-sdk/nested-clients/@smithy/node-http-handler": ["@smithy/node-http-handler@4.9.12", "", { "dependencies": { "@smithy/core": "^3.31.0", "@smithy/types": "^4.16.1", "tslib": "^2.6.2" } }, "sha512-dWW5KRt4mnEvjNzbGqGeCuAvgum85Y9ZoyuMQqcTEfapndyVJ1k9BEHK7kdXJZ32enyRmmwcFjMwlB/KgLKI3Q=="],
+
+    "@danypops/enigma-client/@danypops/daemon-kit": ["@danypops/daemon-kit@0.18.0", "", { "dependencies": { "pino": "^10.3.1" }, "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "typescript": "^5" }, "optionalPeers": ["@earendil-works/pi-coding-agent"] }, "sha512-952ilZHgDBqGCSJ2F58Bdrcgom06+2pVFHIJjh7yvgmjUoEEWCEftgFat0y25i6RdLR7LOl8qScZlVs0Rn8osQ=="],
 
     "p-retry/retry": ["retry@0.13.1", "", {}, "sha512-XQBQ3I8W1Cge0Seh+6gjj03LbmRFWuoszgK9ooCpwYIrhhoO80pfq4cUkU5DkknwfOfFteRwlZ56PYOGYyFWdg=="],
 
