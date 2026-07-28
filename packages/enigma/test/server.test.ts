@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { OidcFetch } from "../src/login-command.ts";
 import { createClientRegistry } from "../src/client-registry.ts";
 import { createCredentialVault } from "../src/credential-vault.ts";
-import { createApp } from "../src/server.ts";
+import { createApp, createUnixSocketHandler } from "../src/server.ts";
 
 const TOKEN = "test-admin-token";
 
@@ -372,6 +372,92 @@ describe("GET /whoami", () => {
 
 			deps.clients.remove("acme-consumer");
 			expect((await app.fetch(withToken("/whoami", clientToken))).status).toBe(401);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("createUnixSocketHandler: identity resolved from a kernel-verified peer uid, never a bearer token", () => {
+	function unauthed(path: string, init: RequestInit = {}): Request {
+		return new Request(`http://enigma.local${path}`, init);
+	}
+
+	it("a peer uid matching the configured adminUid gets full admin access, with no Authorization header at all", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			deps.vault.save("widgetapi", { accessToken: "secret", extra: {} });
+			const handler = createUnixSocketHandler(deps, { adminUid: 1001 });
+
+			const response = await handler(unauthed("/creds/widgetapi"), { pid: 1, uid: 1001, gid: 1001 });
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ accessToken: "secret", extra: {} });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("a peer uid bound to a registered client gets that client's scoped access, same 403 boundary as the bearer-token path", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			deps.vault.save("widgetapi", { accessToken: "secret", extra: {} });
+			deps.vault.save("gadgetapi", { accessToken: "other-secret", extra: {} });
+			deps.clients.add("acme-consumer", ["widgetapi"], { uid: 2002 });
+			const handler = createUnixSocketHandler(deps, { adminUid: 1001 });
+
+			const inScope = await handler(unauthed("/creds/widgetapi"), { pid: 1, uid: 2002, gid: 2002 });
+			expect(inScope.status).toBe(200);
+
+			const outOfScope = await handler(unauthed("/creds/gadgetapi"), { pid: 1, uid: 2002, gid: 2002 });
+			expect(outOfScope.status).toBe(403);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("an unrecognized peer uid is rejected outright, same as a missing/wrong bearer token", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			deps.vault.save("widgetapi", { accessToken: "secret", extra: {} });
+			const handler = createUnixSocketHandler(deps, { adminUid: 1001 });
+
+			const response = await handler(unauthed("/creds/widgetapi"), { pid: 1, uid: 9999, gid: 9999 });
+			expect(response.status).toBe(401);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("an Authorization header presented over the unix transport is ignored -- identity comes only from the kernel-verified peer, never a header a peer could forge", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			deps.vault.save("widgetapi", { accessToken: "secret", extra: {} });
+			const handler = createUnixSocketHandler(deps, { adminUid: 1001 });
+
+			// Presents the real admin bearer token, but from an unrecognized uid -- must still be rejected.
+			const response = await handler(withToken("/creds/widgetapi", TOKEN), { pid: 1, uid: 9999, gid: 9999 });
+			expect(response.status).toBe(401);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("/whoami over the unix transport reports the peer-resolved identity, admin or client, same shape as the bearer-token path", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			deps.clients.add("acme-consumer", ["widgetapi"], { uid: 2002 });
+			const handler = createUnixSocketHandler(deps, { adminUid: 1001 });
+
+			const adminWhoami = await handler(unauthed("/whoami"), { pid: 1, uid: 1001, gid: 1001 });
+			expect(await adminWhoami.json()).toEqual({ name: "admin", backends: null });
+
+			const clientWhoami = await handler(unauthed("/whoami"), { pid: 1, uid: 2002, gid: 2002 });
+			expect(await clientWhoami.json()).toEqual({ name: "acme-consumer", backends: ["widgetapi"] });
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
