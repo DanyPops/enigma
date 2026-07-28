@@ -369,13 +369,19 @@ describe("tryEnigmaCredential over the Unix-socket transport", () => {
 	it("an explicitly passed fetchImpl always wins, even when a real Unix socket is present -- an explicit transport override must never be silently superseded by auto-detection", async () => {
 		const { dir, env } = tmpXdg();
 		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		const stateDir = join(env.XDG_STATE_HOME, "enigma");
 		mkdirSync(handleDir, { recursive: true });
+		mkdirSync(stateDir, { recursive: true });
+		// A real TCP handle + token so the fetchImpl-forced TCP path has something to resolve to --
+		// the port is never actually dialed, since fetchImpl replaces the real network call entirely.
+		writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: 1, pid: process.pid }));
+		writeFileSync(join(stateDir, "token"), "fixture-enigma-bearer\n");
 		const socketPath = join(handleDir, "admin.sock");
 		// A real, live Unix socket that would happily answer -- proves the override is genuine, not just untested absence.
 		const unixServer = serveUnixRpc({ path: socketPath, handler: async () => new Response(JSON.stringify({ accessToken: "unix-token" }), { headers: { "content-type": "application/json" } }) });
 		try {
 			let calls = 0;
-			const fetchImpl: typeof fetch = (async () => {
+			const fetchImpl = (async (..._args: Parameters<typeof fetch>) => {
 				calls++;
 				return new Response(JSON.stringify({ accessToken: "injected-token" }), { headers: { "content-type": "application/json" } });
 			}) as typeof fetch;

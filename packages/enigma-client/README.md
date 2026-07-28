@@ -4,6 +4,10 @@ Client for talking to a running [Enigma](https://github.com/DanyPops/enigma) vau
 
 Every call is bounded (500ms) and non-throwing: "Enigma isn't running," "not configured for this backend," and "unreachable" all resolve to `undefined`, never an error. A slow or hung Enigma can never stall your own daemon's startup.
 
+## Transport
+
+Prefers a Unix-socket connection to Enigma's admin socket (kernel-verified peer identity via `SO_PEERCRED`, no bearer credential needed at all) whenever one is present, falling back to TCP + bearer token otherwise -- an older Enigma with no Unix-socket support, or none running, look identical from here. Nothing about a caller's own code changes either way: `tryEnigmaCredential`/`tryEnigmaAccessToken`/`tryEnigmaWhoAmI` behave the same regardless of which transport actually served the request. Passing your own `fetchImpl` (below, or in a test) always pins the TCP path explicitly and skips Unix-socket detection entirely.
+
 ## Usage
 
 ```ts

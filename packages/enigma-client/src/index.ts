@@ -125,7 +125,12 @@ function connect(opts: TryEnigmaCredentialOptions): ConnectedVault | undefined {
 	// has to hold, store, or risk leaking any credential material just to reach the vault.
 	// An explicitly passed opts.token still always wins the TCP path below, but is simply
 	// irrelevant here -- the transport itself is the proof of identity, not a header.
-	const unixSocketPath = resolveAdminSocketPath(paths.handle, ENIGMA_SYSTEM_RUNTIME_HANDLE);
+	//
+	// Skipped entirely when the caller passes its own fetchImpl: that option exists
+	// specifically so a caller can pin the exact transport (almost always a test), and
+	// auto-detecting a real Unix socket out from under it -- silently ignoring the
+	// override -- would defeat the entire point of the seam.
+	const unixSocketPath = opts.fetchImpl ? undefined : resolveAdminSocketPath(paths.handle, ENIGMA_SYSTEM_RUNTIME_HANDLE);
 	if (unixSocketPath) {
 		// connectUnixRpc's own transport takes a real Request, not the (url, init) pair getJson
 		// calls fetchImpl with (that shape matches plain fetch, not this transport) -- adapted
