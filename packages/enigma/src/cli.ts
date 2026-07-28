@@ -2,7 +2,7 @@
 import { ensureAuthToken, readDaemonHandle } from "@danypops/daemon-kit/paths";
 import { openInBrowser } from "./browser-launcher.ts";
 import { connectEnigmaClient } from "./client.ts";
-import { ClientAlreadyRegisteredError, ClientNotFoundError, createClientRegistry } from "./client-registry.ts";
+import { ClientAlreadyRegisteredError, ClientNotFoundError, createClientRegistry, UidAlreadyBoundError } from "./client-registry.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import { serveMain } from "./daemon.ts";
 import { loginApiKey, loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc } from "./login-command.ts";
@@ -245,20 +245,31 @@ async function clientMain(args: string[]): Promise<void> {
 	switch (subcommand) {
 		case "add": {
 			const backendsFlag = parseFlag(args, "--backends");
+			const uidFlag = parseFlag(args, "--uid");
 			if (!name || !backendsFlag) {
-				console.error("usage: enigma client add <name> --backends <comma,separated,list>");
+				console.error("usage: enigma client add <name> --backends <comma,separated,list> [--uid <kernel-verified-caller-uid>]");
+				process.exit(1);
+			}
+			const uid = uidFlag !== undefined ? Number(uidFlag) : undefined;
+			if (uidFlag !== undefined && (!Number.isInteger(uid) || uid! < 0)) {
+				console.error(`--uid must be a non-negative integer, got "${uidFlag}"`);
 				process.exit(1);
 			}
 			try {
 				const token = registry.add(
 					name,
 					backendsFlag.split(",").map((b) => b.trim()).filter(Boolean),
+					uid !== undefined ? { uid } : undefined,
 				);
 				console.log(`Registered "${name}". Token (shown once, store it in ${name}'s own config, never in Enigma):`);
 				console.log(token);
 			} catch (error) {
 				if (error instanceof ClientAlreadyRegisteredError) {
 					console.error(`${error.message} -- use "enigma client rotate ${name}" to reissue its token.`);
+					process.exit(1);
+				}
+				if (error instanceof UidAlreadyBoundError) {
+					console.error(error.message);
 					process.exit(1);
 				}
 				throw error;

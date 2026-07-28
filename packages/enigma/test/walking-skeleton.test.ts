@@ -239,6 +239,25 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 		}
 	});
 
+	it("client add --uid binds a real uid the running daemon then resolves via /whoami with no bearer token at all", async () => {
+		const dir = tmpDir();
+		let env: XdgEnv | undefined;
+		try {
+			env = xdgEnv(dir);
+			const myUid = process.getuid?.();
+			expect(myUid).toBeDefined();
+
+			const add = await runCli(["client", "add", "acme-consumer", "--backends", "WIDGETAPI", "--uid", String(myUid)], env);
+			expect(add.code).toBe(0);
+
+			const list = await runCli(["client", "list"], env);
+			expect(list.code).toBe(0);
+			expect(JSON.parse(list.stdout)).toEqual([{ name: "acme-consumer", backends: ["widgetapi"], createdAt: expect.any(String), uid: myUid }]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("pins Secret Service across separate login and daemon processes when a desktop service is available", async () => {
 		const dbusAddress = process.env.DBUS_SESSION_BUS_ADDRESS;
 		if (!dbusAddress) return;

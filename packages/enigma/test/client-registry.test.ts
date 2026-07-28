@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClientAlreadyRegisteredError, ClientNotFoundError, createClientRegistry } from "../src/client-registry.ts";
+import { ClientAlreadyRegisteredError, ClientNotFoundError, createClientRegistry, UidAlreadyBoundError } from "../src/client-registry.ts";
 
 function registryPath(): string {
 	return join(mkdtempSync(join(tmpdir(), "enigma-client-registry-")), "clients.json");
@@ -91,5 +91,59 @@ describe("createClientRegistry", () => {
 		const token = createClientRegistry(path).add("tickets", ["jira"]);
 		const reopened = createClientRegistry(path);
 		expect(reopened.authenticate(token)?.name).toBe("tickets");
+	});
+});
+
+describe("createClientRegistry: SO_PEERCRED uid binding, alongside bearer-token auth", () => {
+	it("add() accepts an optional uid, and authenticateByUid() resolves it back to the client", () => {
+		const registry = createClientRegistry(registryPath());
+		registry.add("tickets", ["jira", "github"], { uid: 1001 });
+		const resolved = registry.authenticateByUid(1001);
+		expect(resolved?.name).toBe("tickets");
+		expect(resolved?.backends).toEqual(["jira", "github"]);
+	});
+
+	it("authenticateByUid() resolves undefined for a uid no client is bound to", () => {
+		const registry = createClientRegistry(registryPath());
+		registry.add("tickets", ["jira"], { uid: 1001 });
+		expect(registry.authenticateByUid(9999)).toBeUndefined();
+	});
+
+	it("a client registered with no uid is never resolved by authenticateByUid() -- token auth still works for it unaffected", () => {
+		const registry = createClientRegistry(registryPath());
+		const token = registry.add("pipes", ["github"]);
+		expect(registry.authenticateByUid(1001)).toBeUndefined();
+		expect(registry.authenticate(token)?.name).toBe("pipes");
+	});
+
+	it("refuses to bind a uid that's already bound to a different client -- a uid can only ever resolve to one client", () => {
+		const registry = createClientRegistry(registryPath());
+		registry.add("tickets", ["jira"], { uid: 1001 });
+		expect(() => registry.add("pipes", ["github"], { uid: 1001 })).toThrow(UidAlreadyBoundError);
+	});
+
+	it("rotate() preserves the bound uid -- only the token changes", () => {
+		const registry = createClientRegistry(registryPath());
+		registry.add("tickets", ["jira"], { uid: 1001 });
+		registry.rotate("tickets");
+		expect(registry.authenticateByUid(1001)?.name).toBe("tickets");
+	});
+
+	it("remove() frees the uid for reuse by a future registration", () => {
+		const registry = createClientRegistry(registryPath());
+		registry.add("tickets", ["jira"], { uid: 1001 });
+		registry.remove("tickets");
+		expect(registry.authenticateByUid(1001)).toBeUndefined();
+		registry.add("pipes", ["github"], { uid: 1001 });
+		expect(registry.authenticateByUid(1001)?.name).toBe("pipes");
+	});
+
+	it("list() surfaces the bound uid for admin visibility, omitted entirely when unset", () => {
+		const registry = createClientRegistry(registryPath());
+		registry.add("tickets", ["jira"], { uid: 1001 });
+		registry.add("pipes", ["github"]);
+		const listed = registry.list();
+		expect(listed.find((c) => c.name === "tickets")?.uid).toBe(1001);
+		expect(listed.find((c) => c.name === "pipes")?.uid).toBeUndefined();
 	});
 });

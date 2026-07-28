@@ -20,6 +20,12 @@ export interface ClientRegistration {
 	backends: string[];
 	tokenHash: string;
 	createdAt: string;
+	/** Kernel-verified caller uid (SO_PEERCRED), bound at registration time. A uid resolves to at most one client. */
+	uid?: number;
+}
+
+export interface AddClientOptions {
+	uid?: number;
 }
 
 export type PublicClientRegistration = Omit<ClientRegistration, "tokenHash">;
@@ -43,15 +49,24 @@ export class ClientNotFoundError extends Error {
 	}
 }
 
+export class UidAlreadyBoundError extends Error {
+	constructor(uid: number, existingName: string) {
+		super(`uid ${uid} is already bound to client "${existingName}" -- a uid can only resolve to one client`);
+		this.name = "UidAlreadyBoundError";
+	}
+}
+
 export interface ClientRegistry {
 	/** Registers a new client, returns its plaintext token -- the only time it's ever visible. */
-	add(name: string, backends: string[]): string;
-	/** Issues a new token for an existing client, invalidating the old one immediately. */
+	add(name: string, backends: string[], options?: AddClientOptions): string;
+	/** Issues a new token for an existing client, invalidating the old one immediately. Preserves any bound uid. */
 	rotate(name: string): string;
 	remove(name: string): void;
 	list(): PublicClientRegistration[];
 	/** Resolves a presented bearer token to its owning client, or undefined if unrecognized. */
 	authenticate(token: string): ClientRegistration | undefined;
+	/** Resolves a kernel-verified caller uid (SO_PEERCRED) to its owning client, or undefined if no client is bound to it. */
+	authenticateByUid(uid: number): ClientRegistration | undefined;
 }
 
 function hashToken(token: string): string {
@@ -80,11 +95,21 @@ function save(path: string, registry: ClientRegistryFile): void {
 
 export function createClientRegistry(path: string): ClientRegistry {
 	return {
-		add(name, backends) {
+		add(name, backends, options) {
 			const registry = load(path);
 			if (registry.clients.some((c) => c.name === name)) throw new ClientAlreadyRegisteredError(name);
+			if (options?.uid !== undefined) {
+				const boundTo = registry.clients.find((c) => c.uid === options.uid);
+				if (boundTo) throw new UidAlreadyBoundError(options.uid, boundTo.name);
+			}
 			const token = randomBytes(CLIENT_TOKEN_BYTES).toString("hex");
-			registry.clients.push({ name, backends: backends.map(normalizeBackendName), tokenHash: hashToken(token), createdAt: new Date().toISOString() });
+			registry.clients.push({
+				name,
+				backends: backends.map(normalizeBackendName),
+				tokenHash: hashToken(token),
+				createdAt: new Date().toISOString(),
+				...(options?.uid !== undefined ? { uid: options.uid } : {}),
+			});
 			save(path, registry);
 			return token;
 		},
@@ -104,11 +129,14 @@ export function createClientRegistry(path: string): ClientRegistry {
 			save(path, { version: 1, clients: next });
 		},
 		list() {
-			return load(path).clients.map(({ name, backends, createdAt }) => ({ name, backends, createdAt }));
+			return load(path).clients.map(({ name, backends, createdAt, uid }) => (uid !== undefined ? { name, backends, createdAt, uid } : { name, backends, createdAt }));
 		},
 		authenticate(token) {
 			const hash = hashToken(token);
 			return load(path).clients.find((c) => c.tokenHash === hash);
+		},
+		authenticateByUid(uid) {
+			return load(path).clients.find((c) => c.uid === uid);
 		},
 	};
 }
