@@ -1,9 +1,14 @@
+import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { serveUnixRpc } from "@danypops/daemon-kit/unix-rpc-server";
 import { connectEnigmaClient } from "../src/client.ts";
+import { createClientRegistry } from "../src/client-registry.ts";
+import { createCredentialVault } from "../src/credential-vault.ts";
 import { resolveEnigmaPaths } from "../src/paths.ts";
+import { createUnixSocketHandler } from "../src/server.ts";
 
 function tmpEnigmaPaths() {
 	const dir = mkdtempSync(join(tmpdir(), "enigma-client-admin-"));
@@ -114,6 +119,89 @@ describe("connectEnigmaClient: health() -- found live as a real bug, a third cop
 
 			const client = connectEnigmaClient(paths, fallbackHandlePath);
 			expect(await client.health()).toEqual({ ok: true, version: "0.12.0" });
+		} finally {
+			server?.stop(true);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("connectEnigmaClient: Unix-socket transport, no token needed at all", () => {
+	it("authenticates purely via SO_PEERCRED as admin, over a real admin.sock, with zero token file present", async () => {
+		const { dir, paths } = tmpEnigmaPaths();
+		const vaultDir = join(dir, "vault");
+		mkdirSync(vaultDir, { recursive: true });
+		const vault = createCredentialVault({ dir: vaultDir, masterKey: randomBytes(32) });
+		const clients = createClientRegistry(join(dir, "clients.json"));
+		const myUid = process.getuid?.();
+		expect(myUid).toBeDefined();
+
+		const socketPath = join(paths.handle, "..", "admin.sock");
+		mkdirSync(join(paths.handle, ".."), { recursive: true });
+		const unixServer = serveUnixRpc({
+			path: socketPath,
+			handler: createUnixSocketHandler({ vault, token: "unused-admin-token", clients }, { adminUid: myUid }),
+		});
+		try {
+			// Deliberately no handle.json, no token file at all -- proves the Unix-socket
+			// path needs neither to succeed for an admin-uid caller.
+			const client = connectEnigmaClient(paths);
+			expect(await client.listCredentialKeys()).toEqual([]);
+		} finally {
+			unixServer.stop();
+			try {
+				unlinkSync(socketPath);
+			} catch {}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("falls back to the TCP+bearer-token path when a socket exists but this process's own uid isn't trusted as admin over it (ENIGMA_ADMIN_UID unset -- the common case for an operator who already has a real admin token)", async () => {
+		const { dir, paths } = tmpEnigmaPaths();
+		const vaultDir = join(dir, "vault");
+		mkdirSync(vaultDir, { recursive: true });
+		const vault = createCredentialVault({ dir: vaultDir, masterKey: randomBytes(32) });
+		const clients = createClientRegistry(join(dir, "clients.json"));
+
+		// A real Unix socket exists (as it always does once the daemon starts one), but with no
+		// adminUid configured -- this process's own uid is never trusted as admin over it, exactly
+		// the default state for an operator who hasn't opted into ENIGMA_ADMIN_UID yet.
+		const socketPath = join(paths.handle, "..", "admin.sock");
+		mkdirSync(join(paths.handle, ".."), { recursive: true });
+		const realAdminToken = "a".repeat(64);
+		const unixServer = serveUnixRpc({ path: socketPath, handler: createUnixSocketHandler({ vault, token: realAdminToken, clients }) });
+
+		// A live TCP server the operator's own real admin token still works against.
+		mkdirSync(join(paths.token, ".."), { recursive: true });
+		writeFileSync(paths.token, realAdminToken);
+		const tcpServer = fixtureServer((request) => (request.headers.get("authorization") === `Bearer ${realAdminToken}` ? new Response(JSON.stringify(["tcp-token-still-works"]), { headers: { "content-type": "application/json" } }) : new Response("unauthorized", { status: 401 })));
+		writeHandle(paths.handle, tcpServer.port);
+
+		try {
+			const client = connectEnigmaClient(paths);
+			expect(await client.listCredentialKeys()).toEqual(["tcp-token-still-works"]);
+		} finally {
+			unixServer.stop();
+			tcpServer.stop(true);
+			try {
+				unlinkSync(socketPath);
+			} catch {}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("falls through to the TCP+bearer-token path when no admin.sock exists (older Enigma, or none running)", async () => {
+		const { dir, paths } = tmpEnigmaPaths();
+		let server: ReturnType<typeof Bun.serve> | undefined;
+		try {
+			mkdirSync(join(paths.token, ".."), { recursive: true });
+			writeFileSync(paths.token, "f".repeat(64));
+			server = fixtureServer((request) => (request.headers.get("authorization") === `Bearer ${"f".repeat(64)}` ? new Response(JSON.stringify(["tcp-fallback"]), { headers: { "content-type": "application/json" } }) : new Response("unauthorized", { status: 401 })));
+			writeHandle(paths.handle, server.port);
+			// Deliberately no admin.sock written -- proves the fallback still works end to end.
+
+			const client = connectEnigmaClient(paths);
+			expect(await client.listCredentialKeys()).toEqual(["tcp-fallback"]);
 		} finally {
 			server?.stop(true);
 			rmSync(dir, { recursive: true, force: true });
