@@ -97,6 +97,30 @@ describe("connectEnigmaClient: handle discovery", () => {
 	});
 });
 
+describe("connectEnigmaClient: health() -- found live as a real bug, a third copy of this exact discovery logic", () => {
+	it("health() goes through the same fixed handle discovery as every other admin operation, via the system-wide fallback", async () => {
+		const { dir, paths } = tmpEnigmaPaths();
+		let server: ReturnType<typeof Bun.serve> | undefined;
+		try {
+			mkdirSync(join(paths.token, ".."), { recursive: true });
+			writeFileSync(paths.token, "e".repeat(64));
+			server = fixtureServer((request) => {
+				if (new URL(request.url).pathname !== "/health") return new Response("not found", { status: 404 });
+				return new Response(JSON.stringify({ ok: true, version: "0.12.0" }), { headers: { "content-type": "application/json" } });
+			});
+			const fallbackHandlePath = join(dir, "system-wide", "handle.json");
+			writeHandle(fallbackHandlePath, server.port);
+			// paths.handle deliberately left unwritten -- proves health() uses the fallback too, not a second unfixed copy.
+
+			const client = connectEnigmaClient(paths, fallbackHandlePath);
+			expect(await client.health()).toEqual({ ok: true, version: "0.12.0" });
+		} finally {
+			server?.stop(true);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("connectEnigmaClient: admin token resolution never mints a throwaway token", () => {
 	it("throws a clear, distinguishing error when a handle is found but no token exists at the resolved path -- never silently mints one", () => {
 		const { dir, paths } = tmpEnigmaPaths();

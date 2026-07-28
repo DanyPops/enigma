@@ -11,6 +11,7 @@ export interface EnigmaAdminClient {
 	rotateCredential(backend: string): Promise<void>;
 	revokeCredential(backend: string): Promise<void>;
 	listCredentialKeys(): Promise<string[]>;
+	health(): Promise<{ ok: boolean; version: string }>;
 }
 
 async function call<T>(baseUrl: string, authToken: string, method: string, path: string): Promise<T | undefined> {
@@ -62,5 +63,10 @@ export function connectEnigmaClient(paths = resolveEnigmaPaths(), fallbackHandle
 		rotateCredential: async (backend) => void (await call(baseUrl, token, "POST", `/rotate/${encodeURIComponent(backend)}`)),
 		revokeCredential: async (backend) => void (await call(baseUrl, token, "POST", `/revoke/${encodeURIComponent(backend)}`)),
 		listCredentialKeys: async () => (await call<string[]>(baseUrl, token, "GET", "/keys")) ?? [],
+		health: async () => {
+			const result = await call<{ ok: boolean; version: string }>(baseUrl, token, "GET", "/health");
+			if (!result) throw new Error("Enigma /health returned no body");
+			return result;
+		},
 	};
 }

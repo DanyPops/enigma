@@ -22,6 +22,7 @@ function fakeVaultClient(records: Record<string, VaultCredential>): EnigmaAdminC
 			client.revoked.push(backend);
 			delete records[backend];
 		},
+		health: async () => ({ ok: true, version: "test" }),
 	};
 	return client;
 }
@@ -160,6 +161,7 @@ describe("runSecretsCommand", () => {
 			getCredentials: async () => undefined,
 			rotateCredential: async () => undefined,
 			revokeCredential: async () => undefined,
+			health: async () => ({ ok: true, version: "test" }),
 		};
 		await runSecretsCommand(ctx, () => client, scriptedPick());
 		expect(notifications[0]?.level).toBe("error");

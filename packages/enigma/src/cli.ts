@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { ensureAuthToken, readDaemonHandle } from "@danypops/daemon-kit/paths";
 import { openInBrowser } from "./browser-launcher.ts";
 import { connectEnigmaClient } from "./client.ts";
 import { ClientAlreadyRegisteredError, ClientNotFoundError, createClientRegistry, UidAlreadyBoundError } from "./client-registry.ts";
@@ -341,15 +340,12 @@ try {
 			await clientMain(process.argv.slice(3));
 			break;
 		case "health": {
-			const paths = resolveEnigmaPaths();
-			const handle = readDaemonHandle(paths.handle);
-			if (!handle) {
-				console.error("Enigma daemon is not running.");
+			try {
+				console.log(JSON.stringify(await connectEnigmaClient().health()));
+			} catch (error) {
+				console.error(error instanceof Error ? error.message : String(error));
 				process.exit(1);
 			}
-			const token = ensureAuthToken(paths.token, "Enigma");
-			const response = await fetch(`http://${handle.host}:${handle.port}/health`, { headers: { authorization: `Bearer ${token}` } });
-			console.log(await response.text());
 			break;
 		}
 		default:
