@@ -84,6 +84,39 @@ describe("enigma vault server", () => {
 		}
 	});
 
+	it("GET /clients lists every registered client (name+backends+uid), admin-only", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			expect(await (await app.fetch(authed("/clients"))).json()).toEqual([]);
+
+			const pipesToken = deps.clients.add("pipes", ["github", "jenkins-ci"]);
+			deps.clients.add("tickets", ["github", "jira"], { uid: 1001 });
+			const list = await (await app.fetch(authed("/clients"))).json();
+			expect(list).toEqual([
+				{ name: "pipes", backends: ["github", "jenkins-ci"], createdAt: expect.any(String) },
+				{ name: "tickets", backends: ["github", "jira"], createdAt: expect.any(String), uid: 1001 },
+			]);
+			// never leaks a client's own token, only its name/scope
+			expect(JSON.stringify(list)).not.toContain(pipesToken);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("GET /clients is refused for a registered client's own token, matching every other admin-only route", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			const clientToken = deps.clients.add("pipes", ["github"]);
+			expect((await app.fetch(withToken("/clients", clientToken))).status).toBe(401);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("GET /creds/:backend returns the stored credential, 404 when not configured", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
 		try {

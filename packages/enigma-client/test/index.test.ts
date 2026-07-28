@@ -10,6 +10,21 @@ function tmpXdg(): { dir: string; env: { XDG_RUNTIME_DIR: string; XDG_STATE_HOME
 	return { dir, env: { XDG_RUNTIME_DIR: join(dir, "run"), XDG_STATE_HOME: join(dir, "state") } };
 }
 
+/**
+ * Every tryEnigmaCredential/tryEnigmaWhoAmI call below must pass an explicit
+ * fallbackHandlePath inside the test's own isolated tmp dir -- omitting it
+ * defaults to the real ENIGMA_SYSTEM_RUNTIME_HANDLE (/run/enigma), which is
+ * genuinely live on any machine running the real Enigma system service.
+ * Confirmed live: with that service upgraded to Unix-socket support and
+ * this host's uid trusted as its admin, these tests silently connected to
+ * and read from the real production vault instead of their own fixture
+ * server. A definitely-nonexistent fallback guarantees isolation regardless
+ * of what happens to be running on the host.
+ */
+function unreachableFallback(dir: string): string {
+	return join(dir, "no-such-fallback", "handle.json");
+}
+
 function fixtureServer(handler: (request: Request) => Response) {
 	return Bun.serve({ port: 0, fetch: handler });
 }
@@ -18,7 +33,7 @@ describe("tryEnigmaCredential", () => {
 	it("resolves undefined immediately when no Enigma handle file exists -- not running, not an error", async () => {
 		const { dir, env } = tmpXdg();
 		try {
-			expect(await tryEnigmaCredential("github", { env })).toBeUndefined();
+			expect(await tryEnigmaCredential("github", { env, fallbackHandlePath: unreachableFallback(dir) })).toBeUndefined();
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -30,7 +45,7 @@ describe("tryEnigmaCredential", () => {
 			const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
 			mkdirSync(handleDir, { recursive: true });
 			writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: 39217, pid: 1 }));
-			expect(await tryEnigmaCredential("github", { env })).toBeUndefined();
+			expect(await tryEnigmaCredential("github", { env, fallbackHandlePath: unreachableFallback(dir) })).toBeUndefined();
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -58,13 +73,13 @@ describe("tryEnigmaCredential", () => {
 			writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: server.port, pid: process.pid }));
 			writeFileSync(join(stateDir, "token"), "fixture-enigma-bearer\n");
 
-			const full = await tryEnigmaCredential("jenkins", { env });
+			const full = await tryEnigmaCredential("jenkins", { env, fallbackHandlePath: unreachableFallback(dir) });
 			expect(full).toEqual({ accessToken: "fixture-jenkins-token", extra: { url: "https://jenkins.example.com", username: "bot" } });
 
-			const bare = await tryEnigmaAccessToken("jenkins", { env });
+			const bare = await tryEnigmaAccessToken("jenkins", { env, fallbackHandlePath: unreachableFallback(dir) });
 			expect(bare).toBe("fixture-jenkins-token");
 
-			const missing = await tryEnigmaCredential("gitlab", { env });
+			const missing = await tryEnigmaCredential("gitlab", { env, fallbackHandlePath: unreachableFallback(dir) });
 			expect(missing).toBeUndefined(); // real 404 -- backend not configured in the vault
 		} finally {
 			server?.stop(true);
@@ -82,7 +97,7 @@ describe("tryEnigmaCredential", () => {
 			// A port nothing is listening on -- connection refused, exercises the same catch-and-fall-through path as a timeout.
 			writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: 1, pid: process.pid }));
 			writeFileSync(join(stateDir, "token"), "fixture-enigma-bearer\n");
-			expect(await tryEnigmaCredential("github", { env })).toBeUndefined();
+			expect(await tryEnigmaCredential("github", { env, fallbackHandlePath: unreachableFallback(dir) })).toBeUndefined();
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -102,7 +117,7 @@ describe("tryEnigmaCredential", () => {
 			writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: server.port, pid: process.pid }));
 			// Deliberately no shared token file written -- proves the explicit token is what's used, not a fallback read.
 
-			const result = await tryEnigmaCredential("jira", { env, token: "my-own-registered-token" });
+			const result = await tryEnigmaCredential("jira", { env, token: "my-own-registered-token", fallbackHandlePath: unreachableFallback(dir) });
 			expect(result).toEqual({ accessToken: "scoped-token" });
 		} finally {
 			server?.stop(true);
@@ -119,7 +134,7 @@ describe("tryEnigmaCredential", () => {
 			mkdirSync(handleDir, { recursive: true });
 			writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: server.port, pid: process.pid }));
 
-			expect(await tryEnigmaCredential("jira", { env, token: "wrong-token" })).toBeUndefined();
+			expect(await tryEnigmaCredential("jira", { env, token: "wrong-token", fallbackHandlePath: unreachableFallback(dir) })).toBeUndefined();
 		} finally {
 			server?.stop(true);
 			rmSync(dir, { recursive: true, force: true });
@@ -131,7 +146,7 @@ describe("tryEnigmaAccessToken", () => {
 	it("resolves undefined the same way tryEnigmaCredential does when nothing is configured", async () => {
 		const { dir, env } = tmpXdg();
 		try {
-			expect(await tryEnigmaAccessToken("github", { env })).toBeUndefined();
+			expect(await tryEnigmaAccessToken("github", { env, fallbackHandlePath: unreachableFallback(dir) })).toBeUndefined();
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -142,7 +157,7 @@ describe("tryEnigmaWhoAmI", () => {
 	it("resolves undefined immediately when no Enigma handle file exists", async () => {
 		const { dir, env } = tmpXdg();
 		try {
-			expect(await tryEnigmaWhoAmI({ env })).toBeUndefined();
+			expect(await tryEnigmaWhoAmI({ env, fallbackHandlePath: unreachableFallback(dir) })).toBeUndefined();
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -164,7 +179,7 @@ describe("tryEnigmaWhoAmI", () => {
 			mkdirSync(handleDir, { recursive: true });
 			writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: server.port, pid: process.pid }));
 
-			const result = await tryEnigmaWhoAmI({ env, token: "acme-consumer-token" });
+			const result = await tryEnigmaWhoAmI({ env, token: "acme-consumer-token", fallbackHandlePath: unreachableFallback(dir) });
 			expect(result).toEqual({ name: "acme-consumer", backends: ["widgetapi", "gadgetapi"] });
 		} finally {
 			server?.stop(true);
@@ -181,7 +196,7 @@ describe("tryEnigmaWhoAmI", () => {
 			mkdirSync(handleDir, { recursive: true });
 			writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: server.port, pid: process.pid }));
 
-			expect(await tryEnigmaWhoAmI({ env, token: "wrong-token" })).toBeUndefined();
+			expect(await tryEnigmaWhoAmI({ env, token: "wrong-token", fallbackHandlePath: unreachableFallback(dir) })).toBeUndefined();
 		} finally {
 			server?.stop(true);
 			rmSync(dir, { recursive: true, force: true });
@@ -286,10 +301,10 @@ describe("tryEnigmaCredential over the Unix-socket transport", () => {
 		try {
 			// Deliberately no handle.json and no token file at all -- the Unix socket
 			// path never needs either to succeed.
-			const result = await tryEnigmaCredential("github", { env });
+			const result = await tryEnigmaCredential("github", { env, fallbackHandlePath: unreachableFallback(dir) });
 			expect(result).toEqual({ accessToken: "unix-socket-token" });
 
-			const bare = await tryEnigmaAccessToken("github", { env });
+			const bare = await tryEnigmaAccessToken("github", { env, fallbackHandlePath: unreachableFallback(dir) });
 			expect(bare).toBe("unix-socket-token");
 		} finally {
 			server.stop();
@@ -319,7 +334,7 @@ describe("tryEnigmaCredential over the Unix-socket transport", () => {
 			handler: async () => new Response(JSON.stringify({ accessToken: "unix-token" }), { headers: { "content-type": "application/json" } }),
 		});
 		try {
-			const result = await tryEnigmaCredential("github", { env });
+			const result = await tryEnigmaCredential("github", { env, fallbackHandlePath: unreachableFallback(dir) });
 			expect(result).toEqual({ accessToken: "unix-token" });
 		} finally {
 			unixServer.stop();
@@ -346,7 +361,7 @@ describe("tryEnigmaCredential over the Unix-socket transport", () => {
 		writeFileSync(join(stateDir, "token"), "fixture-enigma-bearer\n");
 		// Deliberately no admin.sock written -- proves the fallback still works end to end.
 		try {
-			const result = await tryEnigmaCredential("github", { env });
+			const result = await tryEnigmaCredential("github", { env, fallbackHandlePath: unreachableFallback(dir) });
 			expect(result).toEqual({ accessToken: "tcp-fallback-token" });
 		} finally {
 			server.stop(true);
@@ -360,7 +375,7 @@ describe("tryEnigmaCredential over the Unix-socket transport", () => {
 		mkdirSync(handleDir, { recursive: true });
 		writeFileSync(join(handleDir, "admin.sock"), ""); // a plain leftover file, not a live listener
 		try {
-			expect(await tryEnigmaCredential("github", { env })).toBeUndefined();
+			expect(await tryEnigmaCredential("github", { env, fallbackHandlePath: unreachableFallback(dir) })).toBeUndefined();
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -386,7 +401,7 @@ describe("tryEnigmaCredential over the Unix-socket transport", () => {
 				return new Response(JSON.stringify({ accessToken: "injected-token" }), { headers: { "content-type": "application/json" } });
 			}) as typeof fetch;
 
-			const result = await tryEnigmaCredential("github", { env, fetchImpl });
+			const result = await tryEnigmaCredential("github", { env, fetchImpl, fallbackHandlePath: unreachableFallback(dir) });
 			expect(result).toEqual({ accessToken: "injected-token" });
 			expect(calls).toBe(1);
 		} finally {
@@ -410,7 +425,7 @@ describe("tryEnigmaWhoAmI over the Unix-socket transport", () => {
 			handler: async (request) => (new URL(request.url).pathname === "/whoami" ? new Response(JSON.stringify({ name: "pipes", backends: ["github", "gitlab"] }), { headers: { "content-type": "application/json" } }) : new Response("not found", { status: 404 })),
 		});
 		try {
-			expect(await tryEnigmaWhoAmI({ env })).toEqual({ name: "pipes", backends: ["github", "gitlab"] });
+			expect(await tryEnigmaWhoAmI({ env, fallbackHandlePath: unreachableFallback(dir) })).toEqual({ name: "pipes", backends: ["github", "gitlab"] });
 		} finally {
 			server.stop();
 			try {

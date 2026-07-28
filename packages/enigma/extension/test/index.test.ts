@@ -1,9 +1,22 @@
+/**
+ * Per this project's TUI-testing rule (Lexicon practices/tui-testing.md):
+ * loginBackendFlow is tested directly, not by scripting a pick() sequence
+ * through the outer two-menu runSecretsCommand -- its own wizard logic
+ * (kind selection -> per-kind flow) has nothing to do with menu depth, and
+ * coupling its tests to that depth is exactly the fragility that broke a
+ * dozen tests here the moment a [services]/[secrets] menu level was added.
+ * runSecretsCommand itself gets a handful of thin wiring smoke tests
+ * confirming the real pieces are plugged in (the Enigma-backed
+ * SecretsBackend, the login extraAction) -- not exhaustive coverage of
+ * behavior daemon-kit's own secrets-tui.test.ts already owns.
+ */
 import { describe, expect, it } from "bun:test";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
+import { SECRETS_MENU } from "@danypops/daemon-kit/secrets-tui";
 import type { EnigmaAdminClient, VaultCredential } from "../../src/client.ts";
 import type { CredentialVault } from "../../src/credential-vault.ts";
-import { LOGIN_ACTION, type LoginFns, runSecretsCommand, type PickFromList } from "../src/index.ts";
+import { LOGIN_ACTION, loginBackendFlow, type LoginFns, runSecretsCommand, type PickFromList } from "../src/index.ts";
 
 const REAL_LOOKING_TOKEN = "ghp_1234567890abcdefghijklmnopqrstuvwxyz12";
 const FIXTURE_JENKINS_TOKEN = "jenkins-fixture-token-not-real";
@@ -22,6 +35,7 @@ function fakeVaultClient(records: Record<string, VaultCredential>): EnigmaAdminC
 			client.revoked.push(backend);
 			delete records[backend];
 		},
+		listClients: async () => [],
 		health: async () => ({ ok: true, version: "test" }),
 	};
 	return client;
@@ -124,7 +138,9 @@ function fakeLoginFns(overrides: Partial<LoginFns> = {}): LoginFns & { calls: Re
 	} as LoginFns & { calls: Record<string, unknown[]> };
 }
 
-describe("runSecretsCommand", () => {
+// ── runSecretsCommand: Enigma-specific pre-flight + wiring, thin ───────────
+
+describe("runSecretsCommand: pre-flight (Enigma-specific, not covered by daemon-kit's own tests)", () => {
 	it("reports a clear error and stops when the daemon isn't running, without throwing", async () => {
 		const { ctx, notifications } = fakeCtx();
 		const connect = () => {
@@ -145,6 +161,7 @@ describe("runSecretsCommand", () => {
 			getCredentials: async () => undefined,
 			rotateCredential: async () => undefined,
 			revokeCredential: async () => undefined,
+			listClients: async () => [],
 			health: async () => ({ ok: true, version: "test" }),
 		};
 		await runSecretsCommand(ctx, () => client, scriptedPick());
@@ -158,70 +175,67 @@ describe("runSecretsCommand", () => {
 		await runSecretsCommand(ctx, () => client, scriptedPick());
 		expect(notifications[0]?.text).toContain("enigma login");
 	});
+});
 
-	it("rotates the selected backend and reports success, never the token", async () => {
-		const { ctx, notifications } = fakeCtx();
+describe("runSecretsCommand: wiring smoke tests (behavior itself owned by daemon-kit's secrets-tui.test.ts)", () => {
+	it("plugs the real Enigma-backed SecretsBackend in -- rotating through the menu calls the real client", async () => {
+		const { ctx } = fakeCtx();
 		const client = fakeVaultClient({ github: { accessToken: REAL_LOOKING_TOKEN } });
-		// pick: 1) choose "github" from the backend list, 2) choose "rotate" from its action menu,
-		// 3) "back" out of the action menu, 4) close the backend list.
-		await runSecretsCommand(ctx, () => client, scriptedPick("enigma\u0000github", "rotate", "back", null));
+		await runSecretsCommand(ctx, () => client, scriptedPick(SECRETS_MENU, "enigma\u0000github", "rotate", "back", null));
 		expect(client.rotated).toEqual(["github"]);
-		expect(notifications.some((n) => n.text === "github: rotated." && n.level === "info")).toBe(true);
-		expect(JSON.stringify(notifications)).not.toContain(REAL_LOOKING_TOKEN);
 	});
 
-	it("surfaces a rotate failure without crashing or leaking secret-shaped detail", async () => {
-		const { ctx, notifications } = fakeCtx();
-		const client = fakeVaultClient({ jenkins: { accessToken: REAL_LOOKING_TOKEN } });
-		client.rotateCredential = async () => {
-			throw new Error("backend \"jenkins\" has no refresh function configured");
-		};
-		await runSecretsCommand(ctx, () => client, scriptedPick("enigma\u0000jenkins", "rotate", "back", null));
-		const failure = notifications.find((n) => n.level === "error");
-		expect(failure?.text).toContain("rotate failed");
-		expect(failure?.text).toContain("no refresh function configured");
-	});
-
-	it("revokes only after explicit confirmation", async () => {
-		const { ctx, notifications } = fakeCtx({ confirm: false });
+	it("plugs the real Enigma-backed SecretsBackend in -- revoking through the menu calls the real client", async () => {
+		const { ctx } = fakeCtx({ confirm: true });
 		const client = fakeVaultClient({ gitlab: { accessToken: REAL_LOOKING_TOKEN } });
-		// Declining the confirm dialog must not revoke; "back" then exits the (still-configured) backend's menu.
-		await runSecretsCommand(ctx, () => client, scriptedPick("enigma\u0000gitlab", "revoke", "back", null));
-		expect(client.revoked).toEqual([]);
-		expect(notifications.some((n) => n.text.includes("revoked"))).toBe(false);
-	});
-
-	it("revokes when confirmed and reports success", async () => {
-		const { ctx, notifications } = fakeCtx({ confirm: true });
-		const client = fakeVaultClient({ gitlab: { accessToken: REAL_LOOKING_TOKEN } });
-		await runSecretsCommand(ctx, () => client, scriptedPick("enigma\u0000gitlab", "revoke", null));
+		await runSecretsCommand(ctx, () => client, scriptedPick(SECRETS_MENU, "enigma\u0000gitlab", "revoke", null));
 		expect(client.revoked).toEqual(["gitlab"]);
-		expect(notifications.some((n) => n.text === "gitlab: revoked." && n.level === "info")).toBe(true);
 	});
 
 	it("always offers a login entry alongside configured backends", async () => {
 		const { ctx } = fakeCtx();
 		const client = fakeVaultClient({ github: { accessToken: REAL_LOOKING_TOKEN } });
 		let seenItems: string[] = [];
-		const pick: PickFromList = async (_ctx, _title, items) => {
+		let steppedPastChooser = false;
+		const pick: PickFromList = async (_ctx, title, items) => {
+			// Step past the two-menu chooser exactly once; any call after the flat list has
+			// been captured returns null so the outer runSecretsCommand loop terminates --
+			// unconditionally redirecting on title alone would loop forever (confirmed live:
+			// this exact shape spun two `bun test` processes at 100% CPU indefinitely).
+			if (title !== "All secrets") {
+				if (steppedPastChooser) return null;
+				steppedPastChooser = true;
+				return SECRETS_MENU;
+			}
 			seenItems = items.map((item) => item.label);
 			return null;
 		};
 		await runSecretsCommand(ctx, () => client, pick);
 		expect(seenItems).toContain("+ Log in a backend");
 	});
+
+	it("selecting the login entry invokes loginBackendFlow (proven here only as wiring; the wizard's own behavior is tested directly below)", async () => {
+		const { ctx } = fakeCtx();
+		const client = fakeVaultClient({});
+		const vault = fakeVault();
+		const loginFns = fakeLoginFns();
+		await runSecretsCommand(ctx, () => client, scriptedPick(SECRETS_MENU, LOGIN_ACTION, "back", null), () => vault, loginFns);
+		// "back" from the kind picker is loginBackendFlow's own no-op exit -- reaching it at all proves the wiring fired.
+		expect(vault.saved).toEqual([]);
+	});
 });
 
-describe("runSecretsCommand > login", () => {
+// ── loginBackendFlow: the wizard's own logic, tested directly -- no outer menu at all ──
+
+describe("loginBackendFlow", () => {
 	it("logs in a device-flow backend (github), relays the code, opens a browser to the verification URL, and saves the token without ever exposing it", async () => {
 		const { ctx, notifications } = fakeCtx();
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
 		const browser = fakeBrowserOpener();
 		process.env.GITHUB_CLIENT_ID = "fixture-client-id";
 		try {
-			await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "github", null), () => vault, loginFns, browser.open);
+			await loginBackendFlow(ctx, () => vault, scriptedPick("github", null), loginFns, browser.open);
 		} finally {
 			delete process.env.GITHUB_CLIENT_ID;
 		}
@@ -234,13 +248,12 @@ describe("runSecretsCommand > login", () => {
 
 	it("never fails a login just because the browser couldn't be opened, and says so", async () => {
 		const { ctx, notifications } = fakeCtx();
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
 		const browser = fakeBrowserOpener(false);
 		process.env.GITHUB_CLIENT_ID = "fixture-client-id";
 		try {
-			await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "github", null), () => vault, loginFns, browser.open);
+			await loginBackendFlow(ctx, () => vault, scriptedPick("github", null), loginFns, browser.open);
 			// The browser-open failure is reported asynchronously (fire-and-forget); give it a tick.
 			await new Promise((resolve) => setTimeout(resolve, 0));
 		} finally {
@@ -253,12 +266,11 @@ describe("runSecretsCommand > login", () => {
 
 	it("refuses to log in a backend when its required env vars are missing, without calling the login function", async () => {
 		const { ctx, notifications } = fakeCtx();
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
 		delete process.env.GITLAB_URL;
 		delete process.env.GITLAB_CLIENT_ID;
-		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "gitlab", null), () => vault, loginFns);
+		await loginBackendFlow(ctx, () => vault, scriptedPick("gitlab", null), loginFns);
 		expect(loginFns.calls.loginGitLab).toEqual([]);
 		expect(vault.saved).toEqual([]);
 		const failure = notifications.find((n) => n.level === "error");
@@ -267,14 +279,13 @@ describe("runSecretsCommand > login", () => {
 
 	it("logs in Jenkins' static token from env with no device-flow prompt, never exposing the token", async () => {
 		const { ctx, notifications } = fakeCtx();
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
 		process.env.JENKINS_URL = "https://jenkins.example.com";
 		process.env.JENKINS_USER = "demo";
 		process.env.JENKINS_API_TOKEN = FIXTURE_JENKINS_TOKEN;
 		try {
-			await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "jenkins", null), () => vault, loginFns);
+			await loginBackendFlow(ctx, () => vault, scriptedPick("jenkins", null), loginFns);
 		} finally {
 			delete process.env.JENKINS_URL;
 			delete process.env.JENKINS_USER;
@@ -287,12 +298,11 @@ describe("runSecretsCommand > login", () => {
 
 	it("logs in a static API key from ENIGMA_APIKEY_VALUE, never typing the key itself into a prompt", async () => {
 		const { ctx, notifications, inputPrompts } = fakeCtx({ inputs: ["brave", "BRAVE_SEARCH_API_KEY"] });
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
 		process.env.ENIGMA_APIKEY_VALUE = "brave-key-fixture";
 		try {
-			await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "apikey", null), () => vault, loginFns);
+			await loginBackendFlow(ctx, () => vault, scriptedPick("apikey", null), loginFns);
 		} finally {
 			delete process.env.ENIGMA_APIKEY_VALUE;
 		}
@@ -304,11 +314,10 @@ describe("runSecretsCommand > login", () => {
 
 	it("opens the interactive registration form (never ctx.ui.input) when ENIGMA_APIKEY_VALUE isn't set, and saves its result", async () => {
 		const { ctx, notifications, inputPrompts } = fakeCtx();
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
 		const promptApiKey = async () => ({ name: "exa", envVar: "EXA_API_KEY", value: "exa-key-fixture" });
-		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "apikey", null), () => vault, loginFns, undefined, promptApiKey);
+		await loginBackendFlow(ctx, () => vault, scriptedPick("apikey", null), loginFns, undefined, promptApiKey);
 		expect(inputPrompts).toEqual([]); // the value never goes through the plain, unmasked ctx.ui.input()
 		expect(vault.saved).toEqual([{ backend: "exa", token: { accessToken: "exa-key-fixture", extra: { envVarName: "EXA_API_KEY" } } }]);
 		expect(notifications.some((n) => n.text === 'API key saved for backend "exa".')).toBe(true);
@@ -317,11 +326,10 @@ describe("runSecretsCommand > login", () => {
 
 	it("does nothing and reports no error when the registration form is canceled", async () => {
 		const { ctx, notifications } = fakeCtx();
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
 		const promptApiKey = async () => null;
-		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "apikey", null), () => vault, loginFns, undefined, promptApiKey);
+		await loginBackendFlow(ctx, () => vault, scriptedPick("apikey", null), loginFns, undefined, promptApiKey);
 		expect(vault.saved).toEqual([]);
 		expect(loginFns.calls.loginApiKey).toEqual([]);
 		expect(notifications.some((n) => n.level === "error")).toBe(false);
@@ -329,10 +337,9 @@ describe("runSecretsCommand > login", () => {
 
 	it("collects OIDC's required fields interactively and saves under the given backend name", async () => {
 		const { ctx, notifications, inputPrompts } = fakeCtx({ inputs: ["my-company-sso", "https://sso.example.com", "fixture-client-id", undefined, undefined] });
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
-		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "oidc", null), () => vault, loginFns, fakeBrowserOpener().open);
+		await loginBackendFlow(ctx, () => vault, scriptedPick("oidc", null), loginFns, fakeBrowserOpener().open);
 		expect(inputPrompts).toEqual(["Backend name", "Issuer URL", "Client ID", "Scope (optional)", "Env var name (optional)"]);
 		expect(vault.saved).toEqual([{ backend: "my-company-sso", token: { accessToken: FIXTURE_OAUTH_TOKEN, extra: { envVarName: "MY_COMPANY_SSO_TOKEN" } } }]);
 		expect(notifications.some((n) => n.text.includes("OIDC-9999"))).toBe(true);
@@ -341,10 +348,9 @@ describe("runSecretsCommand > login", () => {
 
 	it("rejects an OIDC login left with a blank required field, without calling the login function", async () => {
 		const { ctx, notifications } = fakeCtx({ inputs: [undefined] });
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
-		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "oidc", null), () => vault, loginFns);
+		await loginBackendFlow(ctx, () => vault, scriptedPick("oidc", null), loginFns);
 		expect(loginFns.calls.loginOidc).toEqual([]);
 		expect(vault.saved).toEqual([]);
 		expect(notifications.some((n) => n.level === "error" && n.text.includes("backend name is required"))).toBe(true);
@@ -352,10 +358,9 @@ describe("runSecretsCommand > login", () => {
 
 	it("refuses interactive login outside a UI session instead of hanging on a dialog that can't render", async () => {
 		const { ctx, notifications } = fakeCtx({ hasUI: false });
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
-		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "github", null), () => vault, loginFns);
+		await loginBackendFlow(ctx, () => vault, scriptedPick("github", null), loginFns);
 		expect(loginFns.calls.loginGitHub).toEqual([]);
 		expect(vault.saved).toEqual([]);
 		expect(notifications.some((n) => n.level === "error" && n.text.includes("run `enigma login` from a terminal"))).toBe(true);
@@ -363,12 +368,11 @@ describe("runSecretsCommand > login", () => {
 
 	it("saves a second account for the same platform under an alias when one is given", async () => {
 		const { ctx, notifications, inputPrompts } = fakeCtx({ inputs: ["github-work"] });
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
 		process.env.GITHUB_CLIENT_ID = "fixture-client-id";
 		try {
-			await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "github", null), () => vault, loginFns, fakeBrowserOpener().open);
+			await loginBackendFlow(ctx, () => vault, scriptedPick("github", null), loginFns, fakeBrowserOpener().open);
 		} finally {
 			delete process.env.GITHUB_CLIENT_ID;
 		}
@@ -379,12 +383,11 @@ describe("runSecretsCommand > login", () => {
 
 	it("defaults to the platform's literal name when no alias is given", async () => {
 		const { ctx, notifications } = fakeCtx({ inputs: [undefined] });
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
 		process.env.GITHUB_CLIENT_ID = "fixture-client-id";
 		try {
-			await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "github", null), () => vault, loginFns, fakeBrowserOpener().open);
+			await loginBackendFlow(ctx, () => vault, scriptedPick("github", null), loginFns, fakeBrowserOpener().open);
 		} finally {
 			delete process.env.GITHUB_CLIENT_ID;
 		}
@@ -394,10 +397,9 @@ describe("runSecretsCommand > login", () => {
 
 	it("backing out of the backend-kind menu does nothing", async () => {
 		const { ctx } = fakeCtx();
-		const client = fakeVaultClient({});
 		const vault = fakeVault();
 		const loginFns = fakeLoginFns();
-		await runSecretsCommand(ctx, () => client, scriptedPick(LOGIN_ACTION, "back", null), () => vault, loginFns);
+		await loginBackendFlow(ctx, () => vault, scriptedPick("back", null), loginFns);
 		expect(vault.saved).toEqual([]);
 		const anyCalled = Object.values(loginFns.calls).some((c) => c.length > 0);
 		expect(anyCalled).toBe(false);

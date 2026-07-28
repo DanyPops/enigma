@@ -60,6 +60,16 @@ export interface TryEnigmaCredentialOptions {
 	token?: string;
 	/** Injectable for tests; production default is the real fetch, bounded by AbortSignal.timeout. */
 	fetchImpl?: typeof fetch;
+	/**
+	 * Overrides ENIGMA_SYSTEM_RUNTIME_HANDLE, the real system-wide fallback
+	 * path -- exists so a test can guarantee isolation from whatever Enigma
+	 * happens to be genuinely running on the host machine (confirmed live: a
+	 * production Enigma with Unix-socket support and this host's uid trusted
+	 * as its admin made every test omitting this silently connect to and read
+	 * from the real vault instead of its own fixture server). Production
+	 * callers should never set this.
+	 */
+	fallbackHandlePath?: string;
 }
 
 export type TryEnigmaCredential = (backend: string, opts?: TryEnigmaCredentialOptions) => Promise<VaultCredential | undefined>;
@@ -130,7 +140,8 @@ function connect(opts: TryEnigmaCredentialOptions): ConnectedVault | undefined {
 	// specifically so a caller can pin the exact transport (almost always a test), and
 	// auto-detecting a real Unix socket out from under it -- silently ignoring the
 	// override -- would defeat the entire point of the seam.
-	const unixSocketPath = opts.fetchImpl ? undefined : resolveAdminSocketPath(paths.handle, ENIGMA_SYSTEM_RUNTIME_HANDLE);
+	const fallbackHandlePath = opts.fallbackHandlePath ?? ENIGMA_SYSTEM_RUNTIME_HANDLE;
+	const unixSocketPath = opts.fetchImpl ? undefined : resolveAdminSocketPath(paths.handle, fallbackHandlePath);
 	if (unixSocketPath) {
 		// connectUnixRpc's own transport takes a real Request, not the (url, init) pair getJson
 		// calls fetchImpl with (that shape matches plain fetch, not this transport) -- adapted
@@ -142,7 +153,7 @@ function connect(opts: TryEnigmaCredentialOptions): ConnectedVault | undefined {
 		return { baseUrl: UNIX_TRANSPORT_BASE_URL, fetchImpl };
 	}
 
-	const handle = resolveHandle(paths.handle, ENIGMA_SYSTEM_RUNTIME_HANDLE);
+	const handle = resolveHandle(paths.handle, fallbackHandlePath);
 	if (!handle) return undefined; // Enigma isn't running -- not an error, just not present
 	const token = resolveToken(opts, paths.token);
 	if (!token) return undefined;

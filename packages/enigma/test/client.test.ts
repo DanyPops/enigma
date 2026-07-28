@@ -26,6 +26,22 @@ function writeHandle(handlePath: string, port: number | undefined): void {
 	writeFileSync(handlePath, JSON.stringify({ host: "127.0.0.1", port, pid: 1 }));
 }
 
+/**
+ * Every connectEnigmaClient(paths) call below must pass an explicit fallback
+ * inside the test's own isolated tmp dir -- omitting it defaults to the real
+ * ENIGMA_SYSTEM_RUNTIME_HANDLE (/run/enigma/handle.json + admin.sock), which
+ * is a genuinely live path on any machine running the real Enigma system
+ * service. Confirmed live: with that service upgraded to Unix-socket
+ * support and this machine's own uid trusted as its admin, tests silently
+ * connected to and read from the real production vault instead of their
+ * own fixture server -- one test's own assertion was too narrow to even
+ * notice. A definitely-nonexistent fallback guarantees isolation regardless
+ * of what happens to be running on the host.
+ */
+function unreachableFallback(dir: string): string {
+	return join(dir, "no-such-fallback", "handle.json");
+}
+
 describe("connectEnigmaClient: handle discovery", () => {
 	it("finds a handle at the primary (XDG_RUNTIME_DIR-scoped) path and can make a real authenticated call", async () => {
 		const { dir, paths } = tmpEnigmaPaths();
@@ -39,7 +55,7 @@ describe("connectEnigmaClient: handle discovery", () => {
 			});
 			writeHandle(paths.handle, server.port);
 
-			const client = connectEnigmaClient(paths);
+			const client = connectEnigmaClient(paths, unreachableFallback(dir));
 			expect(await client.listCredentialKeys()).toEqual(["jira", "github"]);
 		} finally {
 			server?.stop(true);
@@ -102,6 +118,29 @@ describe("connectEnigmaClient: handle discovery", () => {
 	});
 });
 
+describe("connectEnigmaClient: listClients()", () => {
+	it("calls GET /clients and returns the parsed roster", async () => {
+		const { dir, paths } = tmpEnigmaPaths();
+		let server: ReturnType<typeof Bun.serve> | undefined;
+		try {
+			mkdirSync(join(paths.token, ".."), { recursive: true });
+			writeFileSync(paths.token, "a".repeat(64));
+			server = fixtureServer((request) => {
+				if (new URL(request.url).pathname !== "/clients") return new Response("not found", { status: 404 });
+				if (request.headers.get("authorization") !== `Bearer ${"a".repeat(64)}`) return new Response("unauthorized", { status: 401 });
+				return new Response(JSON.stringify([{ name: "pipes", backends: ["github"] }]), { headers: { "content-type": "application/json" } });
+			});
+			writeHandle(paths.handle, server.port);
+
+			const client = connectEnigmaClient(paths, unreachableFallback(dir));
+			expect(await client.listClients()).toEqual([{ name: "pipes", backends: ["github"] }]);
+		} finally {
+			server?.stop(true);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("connectEnigmaClient: health() -- found live as a real bug, a third copy of this exact discovery logic", () => {
 	it("health() goes through the same fixed handle discovery as every other admin operation, via the system-wide fallback", async () => {
 		const { dir, paths } = tmpEnigmaPaths();
@@ -144,8 +183,10 @@ describe("connectEnigmaClient: Unix-socket transport, no token needed at all", (
 		});
 		try {
 			// Deliberately no handle.json, no token file at all -- proves the Unix-socket
-			// path needs neither to succeed for an admin-uid caller.
-			const client = connectEnigmaClient(paths);
+			// path needs neither to succeed for an admin-uid caller. The fallback is still
+			// pinned to this test's own tmp dir: the primary admin.sock above must be what
+			// wins, not an accidental real fallback.
+			const client = connectEnigmaClient(paths, unreachableFallback(dir));
 			expect(await client.listCredentialKeys()).toEqual([]);
 		} finally {
 			unixServer.stop();
@@ -178,7 +219,7 @@ describe("connectEnigmaClient: Unix-socket transport, no token needed at all", (
 		writeHandle(paths.handle, tcpServer.port);
 
 		try {
-			const client = connectEnigmaClient(paths);
+			const client = connectEnigmaClient(paths, unreachableFallback(dir));
 			expect(await client.listCredentialKeys()).toEqual(["tcp-token-still-works"]);
 		} finally {
 			unixServer.stop();
@@ -199,8 +240,10 @@ describe("connectEnigmaClient: Unix-socket transport, no token needed at all", (
 			server = fixtureServer((request) => (request.headers.get("authorization") === `Bearer ${"f".repeat(64)}` ? new Response(JSON.stringify(["tcp-fallback"]), { headers: { "content-type": "application/json" } }) : new Response("unauthorized", { status: 401 })));
 			writeHandle(paths.handle, server.port);
 			// Deliberately no admin.sock written -- proves the fallback still works end to end.
+			// (The *socket* fallback is real system state either way; unreachableFallback here
+			// only pins the *handle* fallback this specific assertion cares about.)
 
-			const client = connectEnigmaClient(paths);
+			const client = connectEnigmaClient(paths, unreachableFallback(dir));
 			expect(await client.listCredentialKeys()).toEqual(["tcp-fallback"]);
 		} finally {
 			server?.stop(true);
@@ -214,7 +257,7 @@ describe("connectEnigmaClient: admin token resolution never mints a throwaway to
 		const { dir, paths } = tmpEnigmaPaths();
 		try {
 			writeHandle(paths.handle, 1);
-			expect(() => connectEnigmaClient(paths)).toThrow(/admin token/i);
+			expect(() => connectEnigmaClient(paths, unreachableFallback(dir))).toThrow(/admin token/i);
 			// The whole point: connecting must never have side effects that create state elsewhere.
 			expect(existsSync(paths.token)).toBe(false);
 		} finally {
@@ -235,7 +278,8 @@ describe("connectEnigmaClient: admin token resolution never mints a throwaway to
 			});
 			writeHandle(paths.handle, server.port);
 
-			await connectEnigmaClient(paths).listCredentialKeys();
+			const keys = await connectEnigmaClient(paths, unreachableFallback(dir)).listCredentialKeys();
+			expect(keys).toEqual([]); // proves this really hit the isolated fixture, not a silently-corrupted real backend
 			expect(readFileSync(paths.token, "utf8")).toBe(`${realToken}\n`);
 		} finally {
 			server?.stop(true);

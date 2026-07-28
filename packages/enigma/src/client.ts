@@ -7,11 +7,19 @@ import { resolveEnigmaPaths } from "./paths.ts";
 
 export type VaultCredential = RefreshableAccessToken;
 
+export interface VaultClientRecord {
+	name: string;
+	backends: string[];
+	uid?: number;
+}
+
 export interface EnigmaAdminClient {
 	getCredentials(backend: string): Promise<VaultCredential | undefined>;
 	rotateCredential(backend: string): Promise<void>;
 	revokeCredential(backend: string): Promise<void>;
 	listCredentialKeys(): Promise<string[]>;
+	/** The [services] side of the /secrets model: every registered client and which backends it may use. Admin-only. */
+	listClients(): Promise<VaultClientRecord[]>;
 	health(): Promise<{ ok: boolean; version: string }>;
 }
 
@@ -82,6 +90,7 @@ function clientFromCall(call: <T>(method: string, path: string) => Promise<T | u
 		rotateCredential: async (backend) => void (await call("POST", `/rotate/${encodeURIComponent(backend)}`)),
 		revokeCredential: async (backend) => void (await call("POST", `/revoke/${encodeURIComponent(backend)}`)),
 		listCredentialKeys: async () => (await call<string[]>("GET", "/keys")) ?? [],
+		listClients: async () => (await call<VaultClientRecord[]>("GET", "/clients")) ?? [],
 		health: async () => {
 			const result = await call<{ ok: boolean; version: string }>("GET", "/health");
 			if (!result) throw new Error("Enigma /health returned no body");

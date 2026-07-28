@@ -85,6 +85,12 @@ async function handleRequest(request: Request, deps: ServerDeps, identity: Ident
 	if (request.method === "GET" && url.pathname === "/keys") {
 		return jsonResponse(deps.vault.listBackends());
 	}
+	// The [services] side of the /secrets model: every registered client and which
+	// backends it may use. Admin-only, like /keys -- a registered client's own token
+	// only ever sees its own scope via /whoami, never the full roster.
+	if (request.method === "GET" && url.pathname === "/clients") {
+		return jsonResponse(deps.clients.list());
+	}
 
 	const rotateBackend = pathBackend(url.pathname, "/rotate/");
 	if (request.method === "POST" && rotateBackend) {

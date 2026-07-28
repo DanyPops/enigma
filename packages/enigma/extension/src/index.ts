@@ -36,6 +36,7 @@ import {
 import { resolveConfiguredMasterKey } from "../../src/master-key.ts";
 import { resolveEnigmaExtraPaths, resolveEnigmaPaths } from "../../src/paths.ts";
 import { createEnigmaSecretsBackend } from "../../src/secrets-backend-adapter.ts";
+import { createEnigmaServicesRegistry } from "../../src/services-registry-adapter.ts";
 
 /** Sentinel item value for the persistent "log in" menu entry, distinct from any real backend name. */
 export const LOGIN_ACTION = "__enigma_secrets_login__";
@@ -136,7 +137,8 @@ async function promptAlias(ctx: ExtensionCommandContext, literalName: string): P
 
 export type PromptApiKeyForm = (ctx: ExtensionCommandContext) => Promise<ApiKeyFormResult | null>;
 
-async function loginBackendFlow(
+/** Exported so tests exercise this wizard directly, without navigating any outer menu (Lexicon practices/tui-testing.md: state/decomposition over scripted pick sequences). */
+export async function loginBackendFlow(
 	ctx: ExtensionCommandContext,
 	buildVault: () => CredentialVault = buildLocalVault,
 	pick: PickFromList = pickFromList,
@@ -321,6 +323,7 @@ export async function runSecretsCommand(
 
 	await runGenericSecretsCommand(ctx, {
 		backends: [createEnigmaSecretsBackend(client)],
+		servicesRegistry: createEnigmaServicesRegistry(client),
 		pick,
 		extraActions: [
 			{

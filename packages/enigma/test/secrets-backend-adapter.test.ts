@@ -15,6 +15,7 @@ function fakeClient(records: Record<string, VaultCredential>): EnigmaAdminClient
 			client.revoked.push(backend);
 			delete records[backend];
 		},
+		listClients: async () => [],
 		health: async () => ({ ok: true, version: "test" }),
 	};
 	return client;
