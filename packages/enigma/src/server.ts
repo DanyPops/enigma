@@ -9,7 +9,7 @@ import type { Logger } from "@danypops/daemon-kit/logging";
 import type { PeerCredential } from "@danypops/daemon-kit/unix-peer-cred";
 import { normalizeBackendName } from "./backend-env-mapping.ts";
 import { resolveRefreshFn } from "./backend-refresh.ts";
-import type { ClientRegistration, ClientRegistry } from "./client-registry.ts";
+import { ClientAlreadyRegisteredError, ClientNotFoundError, UidAlreadyBoundError, type ClientRegistration, type ClientRegistry } from "./client-registry.ts";
 import type { CredentialVault } from "./credential-vault.ts";
 import type { OidcFetch } from "./login-command.ts";
 import { VERSION } from "./version.ts";
@@ -72,6 +72,13 @@ function pathBackend(pathname: string, prefix: string): string | undefined {
 	return rest ? normalizeBackendName(decodeURIComponent(rest)) : undefined;
 }
 
+/** Matches "/clients/:name<suffix>", e.g. pathClientName("/clients/pipes/rotate", "/rotate") -> "pipes". A client name is never case-normalized (unlike a backend name) -- it's the operator's own chosen label, not a lookup key with multiple valid spellings. */
+function pathClientName(pathname: string, suffix: string): string | undefined {
+	if (!pathname.startsWith("/clients/") || !pathname.endsWith(suffix)) return undefined;
+	const middle = pathname.slice("/clients/".length, pathname.length - suffix.length);
+	return middle ? decodeURIComponent(middle) : undefined;
+}
+
 async function handleRequest(request: Request, deps: ServerDeps, identity: Identity): Promise<Response> {
 	const url = new URL(request.url);
 	const isAdmin = identity.kind === "admin";
@@ -124,6 +131,61 @@ async function handleRequest(request: Request, deps: ServerDeps, identity: Ident
 	// only ever sees its own scope via /whoami, never the full roster.
 	if (request.method === "GET" && url.pathname === "/clients") {
 		return jsonResponse(deps.clients.list());
+	}
+
+	// Registers a new client the same way `enigma client add` does locally --
+	// the daemon itself performs the write, so an admin caller never needs
+	// filesystem access to wherever the registry actually lives (a different
+	// service account's state directory, on a real deployment). Admin-only,
+	// like every other client-registry mutation.
+	if (request.method === "POST" && url.pathname === "/clients") {
+		let body: { name?: unknown; backends?: unknown; uid?: unknown };
+		try {
+			body = (await request.json()) as typeof body;
+		} catch {
+			return errorResponse("malformed JSON body", 400);
+		}
+		const { name, backends, uid } = body;
+		if (typeof name !== "string" || !name || !Array.isArray(backends) || backends.length === 0 || !backends.every((b) => typeof b === "string")) {
+			return errorResponse("name (string) and backends (non-empty string array) are required", 400);
+		}
+		if (uid !== undefined && (typeof uid !== "number" || !Number.isInteger(uid) || uid < 0)) {
+			return errorResponse("uid must be a non-negative integer when given", 400);
+		}
+		try {
+			const token = deps.clients.add(name, backends, uid !== undefined ? { uid } : undefined);
+			return jsonResponse({ token }, { status: 201 });
+		} catch (error) {
+			if (error instanceof ClientAlreadyRegisteredError || error instanceof UidAlreadyBoundError) {
+				return errorResponse(error.message, 409);
+			}
+			throw error;
+		}
+	}
+
+	// Named the same verb-as-path way as /rotate/:backend and /revoke/:backend above,
+	// for one consistent style rather than mixing in a DELETE-based REST convention
+	// for just this one resource.
+	const rotateClientName = pathClientName(url.pathname, "/rotate");
+	if (request.method === "POST" && rotateClientName) {
+		try {
+			const token = deps.clients.rotate(rotateClientName);
+			return jsonResponse({ token });
+		} catch (error) {
+			if (error instanceof ClientNotFoundError) return errorResponse(error.message, 404);
+			throw error;
+		}
+	}
+
+	const removeClientName = pathClientName(url.pathname, "/remove");
+	if (request.method === "POST" && removeClientName) {
+		try {
+			deps.clients.remove(removeClientName);
+			return new Response(null, { status: 204 });
+		} catch (error) {
+			if (error instanceof ClientNotFoundError) return errorResponse(error.message, 404);
+			throw error;
+		}
 	}
 
 	const rotateBackend = pathBackend(url.pathname, "/rotate/");

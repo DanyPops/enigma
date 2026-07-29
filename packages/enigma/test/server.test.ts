@@ -148,6 +148,180 @@ describe("enigma vault server", () => {
 		}
 	});
 
+	it("POST /clients registers a new client and returns its token once, admin-only -- the daemon does the write, not the caller's own filesystem", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			const response = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave", "tavily"] }) }));
+			expect(response.status).toBe(201);
+			const { token } = (await response.json()) as { token: string };
+			expect(typeof token).toBe("string");
+			expect(token.length).toBeGreaterThan(0);
+
+			// the registration really landed -- the same token now authenticates as that client
+			const registration = deps.clients.authenticate(token);
+			expect(registration?.name).toBe("web-spider");
+			expect(registration?.backends).toEqual(["brave", "tavily"]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients accepts an optional uid, binding the client for the Unix-socket transport too", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			const response = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"], uid: 4217278 }) }));
+			expect(response.status).toBe(201);
+			expect(deps.clients.authenticateByUid(4217278)?.name).toBe("web-spider");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients returns 409 for a name that's already registered", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			deps.clients.add("web-spider", ["brave"]);
+			const response = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["tavily"] }) }));
+			expect(response.status).toBe(409);
+			expect((await response.json() as { error: string }).error).toContain('"web-spider" is already registered');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients returns 409 when the requested uid is already bound to a different client", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			deps.clients.add("pipes", ["github"], { uid: 1001 });
+			const response = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"], uid: 1001 }) }));
+			expect(response.status).toBe(409);
+			expect((await response.json() as { error: string }).error).toContain("already bound");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients returns 400 for a missing name, missing backends, or an empty backends array", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			const noName = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ backends: ["brave"] }) }));
+			expect(noName.status).toBe(400);
+			const noBackends = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider" }) }));
+			expect(noBackends.status).toBe(400);
+			const emptyBackends = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: [] }) }));
+			expect(emptyBackends.status).toBe(400);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients returns 400 for malformed JSON", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			const response = await app.fetch(authed("/clients", { method: "POST", body: "not json" }));
+			expect(response.status).toBe(400);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients is refused for a registered client's own token, and for no token at all", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			const clientToken = deps.clients.add("pipes", ["github"]);
+			const asClient = await app.fetch(withToken("/clients", clientToken, { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }));
+			expect(asClient.status).toBe(401);
+			const unauthenticated = await app.fetch(new Request("http://enigma.local/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }));
+			expect(unauthenticated.status).toBe(401);
+			// neither attempt actually registered anything
+			expect(deps.clients.list()).toEqual([{ name: "pipes", backends: ["github"], createdAt: expect.any(String) }]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients/:name/rotate reissues that client's token, invalidating the old one", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			const oldToken = deps.clients.add("web-spider", ["brave"]);
+			const response = await app.fetch(authed("/clients/web-spider/rotate", { method: "POST" }));
+			expect(response.status).toBe(200);
+			const { token: newToken } = (await response.json()) as { token: string };
+			expect(newToken).not.toBe(oldToken);
+			expect(deps.clients.authenticate(oldToken)).toBeUndefined();
+			expect(deps.clients.authenticate(newToken)?.name).toBe("web-spider");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients/:name/rotate returns 404 for an unregistered name", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			expect((await app.fetch(authed("/clients/nonexistent/rotate", { method: "POST" }))).status).toBe(404);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients/:name/remove deletes the registration, its old token stops working", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			const token = deps.clients.add("web-spider", ["brave"]);
+			const response = await app.fetch(authed("/clients/web-spider/remove", { method: "POST" }));
+			expect(response.status).toBe(204);
+			expect(deps.clients.authenticate(token)).toBeUndefined();
+			expect(deps.clients.list()).toEqual([]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients/:name/remove returns 404 for an unregistered name", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			expect((await app.fetch(authed("/clients/nonexistent/remove", { method: "POST" }))).status).toBe(404);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients/:name/rotate and /remove are refused for a registered client's own token", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const app = createApp(deps);
+			deps.clients.add("web-spider", ["brave"]);
+			const clientToken = deps.clients.add("pipes", ["github"]);
+			expect((await app.fetch(withToken("/clients/web-spider/rotate", clientToken, { method: "POST" }))).status).toBe(401);
+			expect((await app.fetch(withToken("/clients/web-spider/remove", clientToken, { method: "POST" }))).status).toBe(401);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("GET /creds/:backend returns the stored credential, 404 when not configured", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
 		try {

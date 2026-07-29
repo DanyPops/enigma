@@ -47,3 +47,30 @@ for (const backend of who?.backends ?? []) {
   }
 }
 ```
+
+## Admin functions -- registering a client, not just consuming one
+
+`addEnigmaClient`/`rotateEnigmaClient`/`removeEnigmaClient` are a different
+audience than everything above: they require *admin* identity (the same
+Unix-socket-then-TCP-token resolution, but the admin end of it, not a
+registered client's own scoped token), and they mutate the client registry
+rather than reading a credential. This is what Enigma's own `enigma client
+add/rotate/remove` CLI calls -- most consumer daemons never need these.
+
+```ts
+import { addEnigmaClient } from "@danypops/enigma-client";
+
+const result = await addEnigmaClient({ name: "pipes", backends: ["github", "gitlab"] });
+if (result === undefined) {
+  // Enigma isn't reachable as admin at all from here -- not a rejection, just absent
+} else if (!result.ok) {
+  console.error(result.error); // a real rejection: already registered, uid already bound, not authorized
+} else {
+  console.log(result.token); // shown once -- store it, never log it again
+}
+```
+
+Same `undefined`-means-absent, real-rejection-means-surfaced contract as
+the read functions above: `undefined` is the caller's cue to fall back to
+some other registration path (Enigma's own CLI falls back to a local-file
+write); a real `{ ok: false, ... }` means Enigma was reached and said no.

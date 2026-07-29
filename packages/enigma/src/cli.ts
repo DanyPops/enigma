@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
+import { addEnigmaClient, removeEnigmaClient, rotateEnigmaClient } from "@danypops/enigma-client";
 import { openInBrowser } from "./browser-launcher.ts";
 import { connectEnigmaClient, type EnigmaAdminClient } from "./client.ts";
-import { ClientAlreadyRegisteredError, ClientNotFoundError, createClientRegistry, UidAlreadyBoundError } from "./client-registry.ts";
+import { ClientAlreadyRegisteredError, ClientNotFoundError, createClientRegistry, UidAlreadyBoundError, type ClientRegistry } from "./client-registry.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import { serveMain } from "./daemon.ts";
 import { loginApiKey, loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc } from "./login-command.ts";
@@ -256,14 +257,64 @@ async function listMain(): Promise<void> {
 }
 
 /**
+ * Prefers the running daemon (POST /clients and its /rotate, /remove
+ * siblings -- see server.ts, all admin-gated) over local-file mutation: the
+ * daemon performs the write itself, so the operator never needs filesystem
+ * access to wherever Enigma's own state actually lives (a different
+ * service account's directory, on a real deployment).
+ *
+ * addEnigmaClient/rotateEnigmaClient/removeEnigmaClient resolve undefined
+ * specifically when Enigma isn't reachable at all -- that, and only that,
+ * is the fallback trigger. A real rejection from a running daemon (already
+ * registered, uid already bound, not authorized, not found) is surfaced
+ * directly instead: falling back to a local-file write after a real remote
+ * rejection would create a phantom local registration alongside whatever
+ * is or isn't in the real registry, which is worse than just failing.
+ *
  * Registration is metadata (a name, an allowed-backends list, a token
- * hash) with no dependency on the master key or the running daemon --
+ * hash) with no dependency on the master key -- the local-file fallback
  * runs entirely against the client registry file, the same way loginMain
- * runs directly against the credential store. A running daemon picks up
- * an add/rotate/remove on its very next request, no restart needed.
+ * runs directly against the credential store, and works even before a
+ * daemon has ever been started. A running daemon picks up a local-file
+ * add/rotate/remove on its very next request, no restart needed -- but
+ * only if it happens to read the very same file this process resolved,
+ * which is exactly the cross-account case the RPC path above exists for.
  */
-async function clientMain(args: string[]): Promise<void> {
-	const registry = createClientRegistry(resolveEnigmaExtraPaths(resolveEnigmaPaths()).clientRegistryFile);
+export interface ClientMainDeps {
+	registry?: ClientRegistry;
+	addEnigmaClient?: typeof addEnigmaClient;
+	rotateEnigmaClient?: typeof rotateEnigmaClient;
+	removeEnigmaClient?: typeof removeEnigmaClient;
+	connectEnigmaClient?: () => EnigmaAdminClient;
+}
+
+/**
+ * Two distinct ways a *reachable* daemon still isn't a usable remote path
+ * for this operation:
+ *  - 401/403: no admin credential against this particular Enigma -- this
+ *    CLI process simply isn't trusted here.
+ *  - 404 on /clients (add has no legitimate 404 of its own -- only 201,
+ *    400, or 409): the daemon predates this route entirely (confirmed
+ *    live against this session's own real system Enigma, several minor
+ *    versions behind the CLI talking to it).
+ * Both are structurally the same problem as the daemon not being reachable
+ * at all, not a real rejection of a well-formed request. rotate/remove's
+ * 404 is genuinely ambiguous (an up-to-date daemon's real "no such
+ * client" vs. an old daemon's missing route) -- falling through either way
+ * is still correct: an up-to-date local registry re-derives the identical
+ * "no such client" rejection on its own if the name truly doesn't exist
+ * there either.
+ */
+function shouldFallBackToLocalFile(status: number): boolean {
+	return status === 401 || status === 403 || status === 404;
+}
+
+export async function clientMain(args: string[], deps: ClientMainDeps = {}): Promise<void> {
+	const registry = deps.registry ?? createClientRegistry(resolveEnigmaExtraPaths(resolveEnigmaPaths()).clientRegistryFile);
+	const tryAddViaRpc = deps.addEnigmaClient ?? addEnigmaClient;
+	const tryRotateViaRpc = deps.rotateEnigmaClient ?? rotateEnigmaClient;
+	const tryRemoveViaRpc = deps.removeEnigmaClient ?? removeEnigmaClient;
+	const connectAdmin = deps.connectEnigmaClient ?? connectEnigmaClient;
 	const [subcommand, name] = args;
 
 	switch (subcommand) {
@@ -279,12 +330,21 @@ async function clientMain(args: string[]): Promise<void> {
 				console.error(`--uid must be a non-negative integer, got "${uidFlag}"`);
 				process.exit(1);
 			}
+			const backends = backendsFlag.split(",").map((b) => b.trim()).filter(Boolean);
+
+			const viaRpc = await tryAddViaRpc({ name, backends, uid });
+			if (viaRpc !== undefined && !(!viaRpc.ok && shouldFallBackToLocalFile(viaRpc.status))) {
+				if (!viaRpc.ok) {
+					console.error(viaRpc.error);
+					process.exit(1);
+				}
+				console.log(`Registered "${name}" via the running daemon. Token (shown once, store it in ${name}'s own config, never in Enigma):`);
+				console.log(viaRpc.token);
+				break;
+			}
+
 			try {
-				const token = registry.add(
-					name,
-					backendsFlag.split(",").map((b) => b.trim()).filter(Boolean),
-					uid !== undefined ? { uid } : undefined,
-				);
+				const token = registry.add(name, backends, uid !== undefined ? { uid } : undefined);
 				console.log(`Registered "${name}". Token (shown once, store it in ${name}'s own config, never in Enigma):`);
 				console.log(token);
 			} catch (error) {
@@ -305,6 +365,18 @@ async function clientMain(args: string[]): Promise<void> {
 				console.error("usage: enigma client rotate <name>");
 				process.exit(1);
 			}
+
+			const viaRpc = await tryRotateViaRpc(name);
+			if (viaRpc !== undefined && !(!viaRpc.ok && shouldFallBackToLocalFile(viaRpc.status))) {
+				if (!viaRpc.ok) {
+					console.error(viaRpc.error);
+					process.exit(1);
+				}
+				console.log(`New token for "${name}" via the running daemon (shown once, the old one no longer works):`);
+				console.log(viaRpc.token);
+				break;
+			}
+
 			try {
 				const token = registry.rotate(name);
 				console.log(`New token for "${name}" (shown once, the old one no longer works):`);
@@ -323,6 +395,17 @@ async function clientMain(args: string[]): Promise<void> {
 				console.error("usage: enigma client remove <name>");
 				process.exit(1);
 			}
+
+			const viaRpc = await tryRemoveViaRpc(name);
+			if (viaRpc !== undefined && !(!viaRpc.ok && shouldFallBackToLocalFile(viaRpc.status))) {
+				if (!viaRpc.ok) {
+					console.error(viaRpc.error);
+					process.exit(1);
+				}
+				console.log(`Removed "${name}" via the running daemon. Its token no longer works.`);
+				break;
+			}
+
 			try {
 				registry.remove(name);
 				console.log(`Removed "${name}". Its token no longer works.`);
@@ -335,9 +418,20 @@ async function clientMain(args: string[]): Promise<void> {
 			}
 			break;
 		}
-		case "list":
-			console.log(JSON.stringify(registry.list(), null, 2));
+		case "list": {
+			// Prefers the real running daemon's own registry (GET /clients, admin-only) over
+			// this process's local file -- reading the wrong one silently (a real, confirmed
+			// footgun: this process's own local file can look emptily "correct" while a real
+			// deployment's actual registry, owned by a different service account, has entries
+			// this process can never see) is worse than a list command that's occasionally
+			// slower because it tried the network first.
+			try {
+				console.log(JSON.stringify(await connectAdmin().listClients(), null, 2));
+			} catch {
+				console.log(JSON.stringify(registry.list(), null, 2));
+			}
 			break;
+		}
 		default:
 			console.error("usage: enigma client <add|rotate|remove|list>\n  add <name> --backends <list>  register a new consumer, print its token once\n  rotate <name>                 reissue a client's token, invalidating the old one\n  remove <name>                 delete a registration, invalidating its token\n  list                          show registered clients and their allowed backends (no tokens)");
 			process.exit(1);

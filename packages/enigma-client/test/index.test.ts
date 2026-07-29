@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serveUnixRpc } from "@danypops/daemon-kit/unix-rpc-server";
-import { resolveAdminSocketPath, resolveHandle, tryEnigmaAccessToken, tryEnigmaCredential, tryEnigmaWhoAmI } from "../src/index.ts";
+import { addEnigmaClient, removeEnigmaClient, resolveAdminSocketPath, resolveHandle, rotateEnigmaClient, tryEnigmaAccessToken, tryEnigmaCredential, tryEnigmaWhoAmI } from "../src/index.ts";
 
 function tmpXdg(): { dir: string; env: { XDG_RUNTIME_DIR: string; XDG_STATE_HOME: string } } {
 	const dir = mkdtempSync(join(tmpdir(), "enigma-client-"));
@@ -426,6 +426,192 @@ describe("tryEnigmaWhoAmI over the Unix-socket transport", () => {
 		});
 		try {
 			expect(await tryEnigmaWhoAmI({ env, fallbackHandlePath: unreachableFallback(dir) })).toEqual({ name: "pipes", backends: ["github", "gitlab"] });
+		} finally {
+			server.stop();
+			try {
+				unlinkSync(socketPath);
+			} catch {}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("addEnigmaClient", () => {
+	it("resolves undefined when Enigma isn't reachable at all -- the caller's cue to fall back to local-file registration", async () => {
+		const { dir, env } = tmpXdg();
+		try {
+			const result = await addEnigmaClient({ name: "web-spider", backends: ["brave"] }, { env, fallbackHandlePath: unreachableFallback(dir) });
+			expect(result).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("registers a real client over the Unix-socket transport, no token needed at all", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		const socketPath = join(handleDir, "admin.sock");
+		const seenRequests: Array<{ path: string; body: unknown; hasAuthHeader: boolean }> = [];
+		const server = serveUnixRpc({
+			path: socketPath,
+			handler: async (request) => {
+				const body = await request.json().catch(() => undefined);
+				seenRequests.push({ path: new URL(request.url).pathname, body, hasAuthHeader: request.headers.get("authorization") !== null });
+				return new Response(JSON.stringify({ token: "minted-token" }), { status: 201, headers: { "content-type": "application/json" } });
+			},
+		});
+		try {
+			const result = await addEnigmaClient({ name: "web-spider", backends: ["brave", "tavily"] }, { env, fallbackHandlePath: unreachableFallback(dir) });
+			expect(result).toEqual({ ok: true, token: "minted-token" });
+			expect(seenRequests).toEqual([{ path: "/clients", body: { name: "web-spider", backends: ["brave", "tavily"] }, hasAuthHeader: false }]);
+		} finally {
+			server.stop();
+			try {
+				unlinkSync(socketPath);
+			} catch {}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("registers a real client over the TCP+bearer-token transport when no Unix socket exists", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		const stateDir = join(env.XDG_STATE_HOME, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		mkdirSync(stateDir, { recursive: true });
+		const server = Bun.serve({
+			port: 0,
+			fetch: async (request) => {
+				if (request.headers.get("authorization") !== "Bearer fixture-enigma-bearer") return new Response("unauthorized", { status: 401 });
+				return new Response(JSON.stringify({ token: "minted-tcp-token" }), { status: 201, headers: { "content-type": "application/json" } });
+			},
+		});
+		writeFileSync(join(handleDir, "handle.json"), JSON.stringify({ host: "127.0.0.1", port: server.port, pid: process.pid }));
+		writeFileSync(join(stateDir, "token"), "fixture-enigma-bearer\n");
+		try {
+			const result = await addEnigmaClient({ name: "web-spider", backends: ["brave"] }, { env, fallbackHandlePath: unreachableFallback(dir) });
+			expect(result).toEqual({ ok: true, token: "minted-tcp-token" });
+		} finally {
+			server.stop(true);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("surfaces a real rejection (already registered) rather than collapsing it to undefined -- a failed mutation is not the same as Enigma being unreachable", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		const socketPath = join(handleDir, "admin.sock");
+		const server = serveUnixRpc({
+			path: socketPath,
+			handler: async () => new Response(JSON.stringify({ error: 'client "web-spider" is already registered' }), { status: 409, headers: { "content-type": "application/json" } }),
+		});
+		try {
+			const result = await addEnigmaClient({ name: "web-spider", backends: ["brave"] }, { env, fallbackHandlePath: unreachableFallback(dir) });
+			expect(result).toEqual({ ok: false, status: 409, error: 'client "web-spider" is already registered' });
+		} finally {
+			server.stop();
+			try {
+				unlinkSync(socketPath);
+			} catch {}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("rotateEnigmaClient", () => {
+	it("resolves undefined when Enigma isn't reachable at all", async () => {
+		const { dir, env } = tmpXdg();
+		try {
+			expect(await rotateEnigmaClient("web-spider", { env, fallbackHandlePath: unreachableFallback(dir) })).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("reissues a real token over the Unix-socket transport", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		const socketPath = join(handleDir, "admin.sock");
+		const server = serveUnixRpc({
+			path: socketPath,
+			handler: async (request) => (new URL(request.url).pathname === "/clients/web-spider/rotate" ? new Response(JSON.stringify({ token: "rotated-token" }), { headers: { "content-type": "application/json" } }) : new Response("not found", { status: 404 })),
+		});
+		try {
+			expect(await rotateEnigmaClient("web-spider", { env, fallbackHandlePath: unreachableFallback(dir) })).toEqual({ ok: true, token: "rotated-token" });
+		} finally {
+			server.stop();
+			try {
+				unlinkSync(socketPath);
+			} catch {}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("surfaces a 404 for an unregistered name rather than undefined", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		const socketPath = join(handleDir, "admin.sock");
+		const server = serveUnixRpc({
+			path: socketPath,
+			handler: async () => new Response(JSON.stringify({ error: 'no registered client named "web-spider"' }), { status: 404, headers: { "content-type": "application/json" } }),
+		});
+		try {
+			expect(await rotateEnigmaClient("web-spider", { env, fallbackHandlePath: unreachableFallback(dir) })).toEqual({ ok: false, status: 404, error: 'no registered client named "web-spider"' });
+		} finally {
+			server.stop();
+			try {
+				unlinkSync(socketPath);
+			} catch {}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("removeEnigmaClient", () => {
+	it("resolves undefined when Enigma isn't reachable at all", async () => {
+		const { dir, env } = tmpXdg();
+		try {
+			expect(await removeEnigmaClient("web-spider", { env, fallbackHandlePath: unreachableFallback(dir) })).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("removes a real registration over the Unix-socket transport", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		const socketPath = join(handleDir, "admin.sock");
+		const server = serveUnixRpc({
+			path: socketPath,
+			handler: async (request) => (new URL(request.url).pathname === "/clients/web-spider/remove" ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 })),
+		});
+		try {
+			expect(await removeEnigmaClient("web-spider", { env, fallbackHandlePath: unreachableFallback(dir) })).toEqual({ ok: true });
+		} finally {
+			server.stop();
+			try {
+				unlinkSync(socketPath);
+			} catch {}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("surfaces a 404 for an unregistered name", async () => {
+		const { dir, env } = tmpXdg();
+		const handleDir = join(env.XDG_RUNTIME_DIR, "enigma");
+		mkdirSync(handleDir, { recursive: true });
+		const socketPath = join(handleDir, "admin.sock");
+		const server = serveUnixRpc({
+			path: socketPath,
+			handler: async () => new Response(JSON.stringify({ error: 'no registered client named "web-spider"' }), { status: 404, headers: { "content-type": "application/json" } }),
+		});
+		try {
+			expect(await removeEnigmaClient("web-spider", { env, fallbackHandlePath: unreachableFallback(dir) })).toEqual({ ok: false, status: 404, error: 'no registered client named "web-spider"' });
 		} finally {
 			server.stop();
 			try {

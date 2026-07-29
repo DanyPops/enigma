@@ -169,6 +169,29 @@ async function getJson<T>(vault: ConnectedVault, path: string): Promise<T | unde
 	return (await response.json()) as T;
 }
 
+/**
+ * Unlike getJson (whose every caller treats a non-2xx as "nothing usable,"
+ * collapsed to undefined), an admin mutation's caller genuinely needs to
+ * know *why* it failed -- already registered, a uid already bound, not
+ * authorized -- to give a useful message instead of a generic "didn't
+ * work." Returns the parsed body and status on any response Enigma actually
+ * sent; only a transport-level failure (unreachable, timed out) is the
+ * caller's job to distinguish, via the outer function returning undefined.
+ */
+async function postJson<TBody, TResult>(vault: ConnectedVault, path: string, body: TBody): Promise<{ status: number; body: TResult | { error: string } | undefined }> {
+	const response = await vault.fetchImpl(`${vault.baseUrl}${path}`, {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			...(vault.token !== undefined ? { authorization: `Bearer ${vault.token}` } : {}),
+		},
+		body: JSON.stringify(body),
+		signal: AbortSignal.timeout(ENIGMA_LOOKUP_TIMEOUT_MS),
+	});
+	const parsed = await response.json().catch(() => undefined);
+	return { status: response.status, body: parsed as TResult | { error: string } | undefined };
+}
+
 /** Fetches the full stored credential (accessToken + extra), for a backend whose credential is more than a bare token (url/username live in extra, e.g. Jenkins). */
 export const tryEnigmaCredential: TryEnigmaCredential = async (backend, opts = {}) => {
 	const vault = connect(opts);
@@ -193,3 +216,78 @@ export const tryEnigmaWhoAmI: TryEnigmaWhoAmI = async (opts = {}) => {
 		return undefined;
 	}
 };
+
+export interface EnigmaClientRegistrationRequest {
+	name: string;
+	backends: string[];
+	/** Kernel-verified caller uid (SO_PEERCRED) to bind, for the Unix-socket transport's zero-token path. */
+	uid?: number;
+}
+
+export type EnigmaAdminMutationResult = { ok: true; token: string } | { ok: false; status: number; error: string };
+
+/**
+ * Registers a new client against a *running* Enigma vault's admin identity
+ * -- the daemon performs the write itself, so the caller never needs
+ * filesystem access to wherever Enigma's own state actually lives (a
+ * different service account's directory, on a real deployment). Requires
+ * admin identity: the Unix-socket admin uid, an explicit admin opts.token,
+ * or a readable shared admin-token file -- a registered client's own scoped
+ * token can never call this, matching the server's own admin-only gate.
+ *
+ * Returns undefined when Enigma isn't reachable *at all* (not running, or no
+ * admin identity available from this process) -- the caller's cue to fall
+ * back to local-file registration, same "absence is not an error" contract
+ * as tryEnigmaCredential/tryEnigmaWhoAmI. Once Enigma is actually reached,
+ * every response -- success or a real rejection (already registered, uid
+ * already bound, not authorized) -- is surfaced, never collapsed to
+ * undefined: unlike a read, a failed *mutation* is something the caller
+ * needs to react to, not silently fall through from.
+ */
+export async function addEnigmaClient(registration: EnigmaClientRegistrationRequest, opts: TryEnigmaCredentialOptions = {}): Promise<EnigmaAdminMutationResult | undefined> {
+	const vault = connect(opts);
+	if (!vault) return undefined;
+	try {
+		const { status, body } = await postJson<EnigmaClientRegistrationRequest, { token: string }>(vault, "/clients", registration);
+		if (status >= 200 && status < 300) {
+			const token = (body as { token?: string } | undefined)?.token;
+			if (!token) return { ok: false, status, error: "malformed success response from Enigma (missing token)" };
+			return { ok: true, token };
+		}
+		return { ok: false, status, error: (body as { error?: string } | undefined)?.error ?? `request failed with status ${status}` };
+	} catch {
+		return undefined; // unreachable, timed out, or any other transport failure
+	}
+}
+
+/** Reissues a client's token, invalidating the old one immediately. Same reachability/error-surfacing contract as addEnigmaClient. */
+export async function rotateEnigmaClient(name: string, opts: TryEnigmaCredentialOptions = {}): Promise<EnigmaAdminMutationResult | undefined> {
+	const vault = connect(opts);
+	if (!vault) return undefined;
+	try {
+		const { status, body } = await postJson<Record<string, never>, { token: string }>(vault, `/clients/${encodeURIComponent(name)}/rotate`, {});
+		if (status >= 200 && status < 300) {
+			const token = (body as { token?: string } | undefined)?.token;
+			if (!token) return { ok: false, status, error: "malformed success response from Enigma (missing token)" };
+			return { ok: true, token };
+		}
+		return { ok: false, status, error: (body as { error?: string } | undefined)?.error ?? `request failed with status ${status}` };
+	} catch {
+		return undefined;
+	}
+}
+
+export type EnigmaRemoveResult = { ok: true } | { ok: false; status: number; error: string };
+
+/** Deletes a client's registration; its token stops working immediately. Same reachability contract as addEnigmaClient/rotateEnigmaClient. */
+export async function removeEnigmaClient(name: string, opts: TryEnigmaCredentialOptions = {}): Promise<EnigmaRemoveResult | undefined> {
+	const vault = connect(opts);
+	if (!vault) return undefined;
+	try {
+		const { status, body } = await postJson<Record<string, never>, undefined>(vault, `/clients/${encodeURIComponent(name)}/remove`, {});
+		if (status >= 200 && status < 300) return { ok: true };
+		return { ok: false, status, error: (body as { error?: string } | undefined)?.error ?? `request failed with status ${status}` };
+	} catch {
+		return undefined;
+	}
+}

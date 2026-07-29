@@ -183,6 +183,40 @@ a registered client's name/uid), and outcome (`ok`/`denied`/`not_found`/
 model. The credential value itself is never logged, only the fact and
 outcome of the access.
 
+### Registering a consumer daemon
+
+```bash
+enigma client add pipes --backends github,gitlab,jenkins
+# -> prints a token once; export it wherever the consumer daemon is started
+enigma client rotate pipes   # reissue, invalidating the old token immediately
+enigma client remove pipes   # delete the registration
+enigma client list           # every registered client and its scope, never tokens
+```
+
+`client add`/`rotate`/`remove`/`list` prefer a *running* daemon's own admin
+RPC (`POST`/`GET /clients`, the same admin-gated routes `/rotate/:backend`
+etc. already use) over writing to the client registry file directly -- the
+daemon performs the write itself, so the operator never needs filesystem
+access to wherever Enigma's own state actually lives, which matters on a
+real deployment where Enigma runs as its own dedicated service account
+rather than the operator's own. Falls back to local-file registration only
+when no daemon is reachable at all as admin (including an old daemon that
+predates these routes) -- not when a *reachable* daemon rejects the request
+for a real reason (already registered, a uid already bound), which is
+surfaced directly instead of silently creating a phantom local registration
+alongside whatever is or isn't in the real registry. Local-file writes
+still work standalone, before a daemon has ever been started, same as
+`login`.
+
+`--uid <kernel-verified-caller-uid>` binds a client to a specific OS uid
+for the Unix-socket transport's zero-token path (SO_PEERCRED) -- a
+consumer daemon running under that exact uid authenticates with no
+credential to hold, store, or leak at all. Only meaningfully scopes a
+client when that uid is unique to it; on a host where the consumer and the
+operator share one account (a `--user` systemd unit, say), the operator's
+own trusted admin uid always resolves as full admin first, not the bound
+client -- a scoped bearer token is the right choice there instead.
+
 ### Multiple accounts on the same platform
 
 `--as <alias>` stores the credential under `<alias>` instead of the

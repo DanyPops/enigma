@@ -211,17 +211,21 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 			expect(existsSync(join(credentialsDir, "widgetapi.json"))).toBe(true);
 			expect(existsSync(join(credentialsDir, "WidgetApi.json"))).toBe(false);
 
-			const add = await runCli(["client", "add", "acme-consumer", "--backends", "WIDGETAPI"], env);
-			expect(add.code).toBe(0);
-			const clientToken = add.stdout.trim().split("\n").pop() ?? "";
-			expect(clientToken.length).toBeGreaterThan(0);
-
+			// client add now tries a running daemon first (POST /clients) -- started before add,
+			// unlike this test's own pre-RPC ordering, so its own admin.sock exists at this
+			// process's primary XDG_RUNTIME_DIR path before any fallback to a host-wide Enigma
+			// is even considered.
 			const proc = Bun.spawn(["bun", CLI_PATH, "serve"], { env, stdout: "ignore", stderr: "pipe" });
 			try {
 				const handlePath = join(env!.XDG_RUNTIME_DIR, "enigma", "handle.json");
 				await waitFor(() => existsSync(handlePath));
 				const handle = JSON.parse(readFileSync(handlePath, "utf8")) as { host: string; port: number };
 				const baseUrl = `http://${handle.host}:${handle.port}`;
+
+				const add = await runCli(["client", "add", "acme-consumer", "--backends", "WIDGETAPI"], env);
+				expect(add.code).toBe(0);
+				const clientToken = add.stdout.trim().split("\n").pop() ?? "";
+				expect(clientToken.length).toBeGreaterThan(0);
 
 				const whoami = await fetch(`${baseUrl}/whoami`, { headers: { authorization: `Bearer ${clientToken}` } });
 				expect(whoami.status).toBe(200);
@@ -239,20 +243,38 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 		}
 	});
 
-	it("client add --uid binds a real uid the running daemon then resolves via /whoami with no bearer token at all", async () => {
+	it("client add --uid registers over the real running daemon's admin RPC, and the bound uid is stored correctly", async () => {
 		const dir = tmpDir();
-		let env: XdgEnv | undefined;
+		let env: (XdgEnv & { ENIGMA_ADMIN_UID: string }) | undefined;
 		try {
-			env = xdgEnv(dir);
 			const myUid = process.getuid?.();
 			expect(myUid).toBeDefined();
+			// This test process's own uid must be this daemon's trusted admin for client
+			// add --uid to actually exercise the new POST /clients RPC path rather than
+			// falling back to local-file registration on an unauthorized 401. Binding the
+			// *registered client* to this same uid (a separate, later concern -- which real
+			// OS process actually authenticates as "acme-consumer" over the socket) is
+			// covered by createUnixSocketHandler's own server.ts unit tests, not here: this
+			// one real test process's uid can only ever play one identity role at a time
+			// over one real connection, and it's already spent being trusted as admin.
+			env = { ...xdgEnv(dir), ENIGMA_ADMIN_UID: String(myUid) };
 
-			const add = await runCli(["client", "add", "acme-consumer", "--backends", "WIDGETAPI", "--uid", String(myUid)], env);
-			expect(add.code).toBe(0);
+			const proc = Bun.spawn(["bun", CLI_PATH, "serve"], { env, stdout: "ignore", stderr: "pipe" });
+			try {
+				const socketPath = join(env.XDG_RUNTIME_DIR, "enigma", "admin.sock");
+				await waitFor(() => existsSync(socketPath));
 
-			const list = await runCli(["client", "list"], env);
-			expect(list.code).toBe(0);
-			expect(JSON.parse(list.stdout)).toEqual([{ name: "acme-consumer", backends: ["widgetapi"], createdAt: expect.any(String), uid: myUid }]);
+				const add = await runCli(["client", "add", "acme-consumer", "--backends", "WIDGETAPI", "--uid", "999999"], env);
+				expect(add.code).toBe(0);
+				expect(add.stdout).toContain("via the running daemon");
+
+				const list = await runCli(["client", "list"], env);
+				expect(list.code).toBe(0);
+				expect(JSON.parse(list.stdout)).toEqual([{ name: "acme-consumer", backends: ["widgetapi"], createdAt: expect.any(String), uid: 999999 }]);
+			} finally {
+				proc.kill("SIGTERM");
+				await proc.exited;
+			}
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
