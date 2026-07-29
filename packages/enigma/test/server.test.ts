@@ -322,6 +322,91 @@ describe("enigma vault server", () => {
 		}
 	});
 
+	it("POST /clients over the bearer-token/TCP transport never consults polkitCheck at all -- there is no peer to check against there", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			let called = false;
+			const app = createApp({ ...deps, polkitCheck: async () => { called = true; return true; } });
+			const response = await app.fetch(new Request("http://enigma.local/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }));
+			expect(response.status).toBe(401);
+			expect(called).toBe(false);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients over the Unix-socket transport grants a non-admin caller when polkitCheck authorizes them", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const seenChecks: Array<{ pid: number; uid: number; actionId: string }> = [];
+			const polkitCheck = async (peer: { pid: number; uid: number }, actionId: string) => {
+				seenChecks.push({ pid: peer.pid, uid: peer.uid, actionId });
+				return true;
+			};
+			const handler = createUnixSocketHandler({ ...deps, polkitCheck }, { adminUid: 1001 });
+
+			const response = await handler(
+				new Request("http://enigma.local/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }),
+				{ pid: 4242, uid: 5555, gid: 5555 },
+			);
+			expect(response.status).toBe(201);
+			expect(seenChecks).toEqual([{ pid: 4242, uid: 5555, actionId: "com.danypops.enigma.manage-clients" }]);
+			expect(deps.clients.list()).toEqual([{ name: "web-spider", backends: ["brave"], createdAt: expect.any(String) }]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients over the Unix-socket transport still refuses a non-admin caller when polkitCheck denies them", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const handler = createUnixSocketHandler({ ...deps, polkitCheck: async () => false }, { adminUid: 1001 });
+			const response = await handler(
+				new Request("http://enigma.local/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }),
+				{ pid: 4242, uid: 5555, gid: 5555 },
+			);
+			expect(response.status).toBe(401);
+			expect(deps.clients.list()).toEqual([]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("POST /clients over the Unix-socket transport is unaffected when polkitCheck is simply absent -- today's admin-only behavior unchanged", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			const handler = createUnixSocketHandler(deps, { adminUid: 1001 });
+			const response = await handler(
+				new Request("http://enigma.local/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }),
+				{ pid: 4242, uid: 5555, gid: 5555 },
+			);
+			expect(response.status).toBe(401);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("the admin uid itself never needs polkitCheck at all -- it's consulted only for a non-admin identity", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
+		try {
+			const deps = buildDeps(dir);
+			let called = false;
+			const handler = createUnixSocketHandler({ ...deps, polkitCheck: async () => { called = true; return false; } }, { adminUid: 1001 });
+			const response = await handler(
+				new Request("http://enigma.local/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }),
+				{ pid: 4242, uid: 1001, gid: 1001 },
+			);
+			expect(response.status).toBe(201);
+			expect(called).toBe(false);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("GET /creds/:backend returns the stored credential, 404 when not configured", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "enigma-server-"));
 		try {

@@ -217,6 +217,35 @@ operator share one account (a `--user` systemd unit, say), the operator's
 own trusted admin uid always resolves as full admin first, not the bound
 client -- a scoped bearer token is the right choice there instead.
 
+### Optional: authorizing client registration via polkit
+
+Linux-only, opt-in via `ENIGMA_POLKIT_ENABLED=1`, and layered on top of the
+existing admin-uid/bearer-token checks -- never a replacement for them, and
+never consulted for the TCP+bearer transport at all (there is no
+OS-verified caller identity to hand polkit over TCP, on any platform).
+With the flag set, a non-admin Unix-socket caller can be authorized for
+`POST /clients` by polkit's own evaluated-permission model (a real
+per-subject decision, or a real graphical authentication prompt) instead
+of only "is this the one configured `ENIGMA_ADMIN_UID`":
+
+```bash
+Environment=ENIGMA_POLKIT_ENABLED=1
+```
+
+Under the hood this shells out to `pkcheck` (part of polkit), always with
+the `pid,start-time,uid` subject form polkit's own docs require (bare
+`pid` or `pid,start-time` have a real PID-reuse race, per `man pkcheck`'s
+own NOTES) -- never the two weaker, racy forms. Install the matching
+action once, as root, before the flag has anything to authorize against:
+
+```bash
+sudo install -m 0644 contrib/polkit/com.danypops.enigma.manage-clients.policy /usr/share/polkit-1/actions/
+```
+
+Only ever applied to `POST /clients` specifically, never as a blanket gate
+on every route -- a polkit check can block on a human clicking a dialog,
+unacceptable latency for anything on the hot credential-read path.
+
 ### Multiple accounts on the same platform
 
 `--as <alias>` stores the credential under `<alias>` instead of the

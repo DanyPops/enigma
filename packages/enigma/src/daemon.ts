@@ -9,6 +9,7 @@ import { createClientRegistry } from "./client-registry.ts";
 import { createCredentialVault, type CredentialVault } from "./credential-vault.ts";
 import { resolveConfiguredMasterKey } from "./master-key.ts";
 import { resolveEnigmaExtraPaths, resolveEnigmaPaths } from "./paths.ts";
+import { createPkcheckAuthorizer } from "./polkit-check.ts";
 import { createApp, createUnixSocketHandler } from "./server.ts";
 
 const logger = createLogger("enigma");
@@ -36,13 +37,24 @@ function resolveAdminUid(env: NodeJS.ProcessEnv): number | undefined {
 	return uid;
 }
 
+/**
+ * ENIGMA_POLKIT_ENABLED opts into asking polkit whether a non-admin
+ * Unix-socket caller is authorized for POST /clients specifically --
+ * absent by default, matching this whole project's "reachable is not the
+ * same as wanted" stance: polkit (and pkcheck) happening to be installed
+ * on the host is never itself a reason to start consulting it.
+ */
+function polkitEnabled(env: NodeJS.ProcessEnv): boolean {
+	return env.ENIGMA_POLKIT_ENABLED === "1" || env.ENIGMA_POLKIT_ENABLED === "true";
+}
+
 /** Vault-only mode — the only mode. Every consumer fetches its own credential over the authenticated API; Enigma never spawns or supervises anything. */
 export function serveMain(): void {
 	const paths = resolveEnigmaPaths();
 	const token = ensureAuthToken(paths.token, "Enigma");
 	const { vault, extra } = buildVault();
 	const clients = createClientRegistry(extra.clientRegistryFile);
-	const deps = { vault, token, clients, logger };
+	const deps = { vault, token, clients, logger, ...(polkitEnabled(process.env) ? { polkitCheck: createPkcheckAuthorizer() } : {}) };
 
 	// World-connectable: any OS user's process may attempt to connect (SO_PEERCRED verifies
 	// who they actually are afterward, which a file permission bit can't do more precisely

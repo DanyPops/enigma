@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "https://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Enigma</vendor>
+  <vendor_url>https://github.com/DanyPops/enigma</vendor_url>
+  <action id="com.danypops.enigma.manage-clients">
+    <description>Manage Enigma client registrations</description>
+    <message>Authentication is required to register, rotate, or remove an Enigma client</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

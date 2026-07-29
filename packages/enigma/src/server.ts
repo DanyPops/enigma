@@ -12,6 +12,7 @@ import { resolveRefreshFn } from "./backend-refresh.ts";
 import { ClientAlreadyRegisteredError, ClientNotFoundError, UidAlreadyBoundError, type ClientRegistration, type ClientRegistry } from "./client-registry.ts";
 import type { CredentialVault } from "./credential-vault.ts";
 import type { OidcFetch } from "./login-command.ts";
+import { ENIGMA_MANAGE_CLIENTS_ACTION_ID, type PolkitCheck } from "./polkit-check.ts";
 import { VERSION } from "./version.ts";
 
 export interface ServerDeps {
@@ -28,6 +29,18 @@ export interface ServerDeps {
 	 * production daemon should always supply the real logger.
 	 */
 	logger?: Logger;
+	/**
+	 * Optional, Linux-only, opt-in: asks polkit whether a specific
+	 * kernel-verified Unix-socket caller is authorized for one narrow action
+	 * (today: registering a client), layered on top of -- never replacing --
+	 * the existing admin-uid/bearer-token checks. Absent by default; every
+	 * existing caller's behavior is exactly unchanged without it. Never
+	 * consulted for the bearer-token/TCP transport (no `peer` to check
+	 * against there) or for any route besides POST /clients -- see
+	 * polkit-check.ts for why (a polkit round-trip can block on a human
+	 * clicking a dialog, unacceptable latency for anything on the hot path).
+	 */
+	polkitCheck?: PolkitCheck;
 }
 
 /**
@@ -79,7 +92,7 @@ function pathClientName(pathname: string, suffix: string): string | undefined {
 	return middle ? decodeURIComponent(middle) : undefined;
 }
 
-async function handleRequest(request: Request, deps: ServerDeps, identity: Identity): Promise<Response> {
+async function handleRequest(request: Request, deps: ServerDeps, identity: Identity, peer?: PeerCredential): Promise<Response> {
 	const url = new URL(request.url);
 	const isAdmin = identity.kind === "admin";
 
@@ -119,26 +132,20 @@ async function handleRequest(request: Request, deps: ServerDeps, identity: Ident
 		return jsonResponse({ name: identity.registration.name, backends: identity.registration.backends.map(normalizeBackendName) });
 	}
 
-	if (!isAdmin) return errorResponse("missing or invalid bearer token", 401);
-
-	if (request.method === "GET" && url.pathname === "/health") return healthResponse(VERSION);
-	if (request.method === "GET" && url.pathname === "/ready") return readyResponse(true);
-	if (request.method === "GET" && url.pathname === "/keys") {
-		return jsonResponse(deps.vault.listBackends());
-	}
-	// The [services] side of the /secrets model: every registered client and which
-	// backends it may use. Admin-only, like /keys -- a registered client's own token
-	// only ever sees its own scope via /whoami, never the full roster.
-	if (request.method === "GET" && url.pathname === "/clients") {
-		return jsonResponse(deps.clients.list());
-	}
-
 	// Registers a new client the same way `enigma client add` does locally --
 	// the daemon itself performs the write, so an admin caller never needs
 	// filesystem access to wherever the registry actually lives (a different
-	// service account's state directory, on a real deployment). Admin-only,
-	// like every other client-registry mutation.
+	// service account's state directory, on a real deployment). Admin-gated
+	// like every other client-registry mutation, but with one narrow, opt-in
+	// exception: a non-admin Unix-socket caller polkit specifically
+	// authorizes for this one action (see polkit-check.ts) -- checked here,
+	// before the blanket admin gate below, the same way /creds/:backend and
+	// /whoami carve out their own non-admin paths above.
 	if (request.method === "POST" && url.pathname === "/clients") {
+		if (!isAdmin) {
+			const authorizedByPolkit = peer && deps.polkitCheck ? await deps.polkitCheck(peer, ENIGMA_MANAGE_CLIENTS_ACTION_ID) : false;
+			if (!authorizedByPolkit) return errorResponse("missing or invalid bearer token", 401);
+		}
 		let body: { name?: unknown; backends?: unknown; uid?: unknown };
 		try {
 			body = (await request.json()) as typeof body;
@@ -161,6 +168,20 @@ async function handleRequest(request: Request, deps: ServerDeps, identity: Ident
 			}
 			throw error;
 		}
+	}
+
+	if (!isAdmin) return errorResponse("missing or invalid bearer token", 401);
+
+	if (request.method === "GET" && url.pathname === "/health") return healthResponse(VERSION);
+	if (request.method === "GET" && url.pathname === "/ready") return readyResponse(true);
+	if (request.method === "GET" && url.pathname === "/keys") {
+		return jsonResponse(deps.vault.listBackends());
+	}
+	// The [services] side of the /secrets model: every registered client and which
+	// backends it may use. Admin-only, like /keys -- a registered client's own token
+	// only ever sees its own scope via /whoami, never the full roster.
+	if (request.method === "GET" && url.pathname === "/clients") {
+		return jsonResponse(deps.clients.list());
 	}
 
 	// Named the same verb-as-path way as /rotate/:backend and /revoke/:backend above,
@@ -223,6 +244,8 @@ async function handleRequest(request: Request, deps: ServerDeps, identity: Ident
 
 export function createApp(deps: ServerDeps): { fetch(request: Request): Promise<Response> } {
 	return {
+		// No peer at all over this transport -- polkitCheck (peer-keyed) can never apply here,
+		// by construction, not merely by convention.
 		fetch: (request: Request) => handleRequest(request, deps, identityFromBearer(request, deps)),
 	};
 }
@@ -248,6 +271,6 @@ export function createUnixSocketHandler(deps: ServerDeps, options: UnixSocketIde
 						const registration = deps.clients.authenticateByUid(peer.uid);
 						return registration ? ({ kind: "client", registration, uid: peer.uid } as const) : ({ kind: "none" } as const);
 					})();
-		return handleRequest(request, deps, identity);
+		return handleRequest(request, deps, identity, peer);
 	};
 }

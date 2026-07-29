@@ -375,4 +375,37 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("ENIGMA_POLKIT_ENABLED wires a real pkcheck call into a real running daemon -- denies gracefully (falls back to local-file registration) since no .policy is actually installed on this machine, without crashing the daemon or the CLI", async () => {
+		const dir = tmpDir();
+		let env: XdgEnv & { ENIGMA_POLKIT_ENABLED: string };
+		try {
+			// Deliberately no ENIGMA_ADMIN_UID: this test process's own real uid must not
+			// already be trusted as admin, so client add is forced through the polkit path
+			// instead of short-circuiting on the existing admin-uid check.
+			env = { ...xdgEnv(dir), ENIGMA_POLKIT_ENABLED: "1" };
+
+			const proc = Bun.spawn(["bun", CLI_PATH, "serve"], { env, stdout: "ignore", stderr: "pipe" });
+			try {
+				const socketPath = join(env.XDG_RUNTIME_DIR, "enigma", "admin.sock");
+				await waitFor(() => existsSync(socketPath));
+
+				// No real com.danypops.enigma.manage-clients policy is installed on this machine
+				// (that's a real, separate root-owned step -- see contrib/polkit/), so the real
+				// pkcheck call genuinely denies here. Proves the wiring doesn't crash the daemon
+				// or hang the CLI, and that clientMain's own fallback still lands correctly.
+				const add = await runCli(["client", "add", "acme-consumer", "--backends", "WIDGETAPI"], env);
+				expect(add.code).toBe(0);
+				expect(add.stdout).not.toContain("via the running daemon");
+
+				const credentialsDir = join(env.XDG_STATE_HOME, "enigma", "clients.json");
+				expect(existsSync(credentialsDir)).toBe(true);
+			} finally {
+				proc.kill("SIGTERM");
+				await proc.exited;
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
