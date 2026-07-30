@@ -1,5 +1,5 @@
 import { dirname, join } from "node:path";
-import { type DaemonPaths, type PathEnvironment, resolveDaemonPaths } from "@danypops/daemon-kit/paths";
+import { type DaemonPaths, type PathEnvironment, resolveDaemonPaths } from "@danypops/vehicle-server/paths";
 import {
 	CLIENT_REGISTRY_FILENAME,
 	CREDENTIALS_DIRECTORY_NAME,

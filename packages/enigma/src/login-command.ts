@@ -46,7 +46,7 @@
  *    shape from GitHub/GitLab's public-client device flow despite both
  *    using the same grant type.
  */
-import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
+import type { RefreshableAccessToken } from "@danypops/vehicle-server/vault";
 import * as oidc from "openid-client";
 
 export interface DeviceCodePrompt {

@@ -2,10 +2,10 @@
  * Client for a running Enigma vault (github.com/DanyPops/enigma), if one
  * happens to be configured on this machine. Purely additive -- a consumer
  * never imports Enigma's own source, only its documented discovery contract
- * (a state-directory name and handle/token filenames) via @danypops/daemon-kit,
+ * (a state-directory name and handle/token filenames) via @danypops/vehicle-server,
  * which every daemon already depends on for its own plumbing. Enigma's own
  * wire protocol (GET /creds/:backend, GET /whoami) is implemented directly
- * here, not borrowed from a "generic" daemon-kit abstraction -- it's
+ * here, not borrowed from a "generic" vehicle-server abstraction -- it's
  * Enigma's own protocol, not a standard other vaults implement.
  *
  * Never creates Enigma's handle or token files -- those are strictly
@@ -18,16 +18,16 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { readDaemonHandle, resolveDaemonPaths, type DaemonHandle } from "@danypops/daemon-kit/paths";
-import { connectUnixRpc } from "@danypops/daemon-kit/unix-rpc-client";
-import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
+import { readDaemonHandle, resolveDaemonPaths, type DaemonHandle } from "@danypops/vehicle-server/paths";
+import { connectUnixRpc } from "@danypops/vehicle-client/unix-rpc-client";
+import type { RefreshableAccessToken } from "@danypops/vehicle-server/vault";
 
 const ENIGMA_STATE_DIRECTORY_NAME = "enigma";
 const ENIGMA_HANDLE_FILENAME = "handle.json";
 const ENIGMA_TOKEN_FILENAME = "token";
 /** Sibling to handle.json in the same directory -- mirrors Enigma's own daemon.ts (ADMIN_SOCKET_FILENAME), duplicated deliberately: this package never imports Enigma's own source, same rationale as duplicating the handle/token filenames above. */
 const ENIGMA_ADMIN_SOCKET_FILENAME = "admin.sock";
-/** Placeholder authority for the Unix-socket transport -- the host is meaningless once request framing goes over a Unix socket instead of TCP (see daemon-kit's own unix-rpc-client.ts), never actually dialed. */
+/** Placeholder authority for the Unix-socket transport -- the host is meaningless once request framing goes over a Unix socket instead of TCP (see vehicle-client's own unix-rpc-client.ts), never actually dialed. */
 const UNIX_TRANSPORT_BASE_URL = "http://enigma.local";
 const ENIGMA_LOOKUP_TIMEOUT_MS = 500;
 const ENIGMA_UNIX_LOOKUP_TIMEOUT_MS = 500;

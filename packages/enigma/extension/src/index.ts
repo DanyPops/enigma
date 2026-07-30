@@ -17,8 +17,8 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
-import { registerSharedSecretsCommand, runSecretsCommand as runGenericSecretsCommand, type SecretsContribution } from "@danypops/daemon-kit/secrets-tui";
-import type { SecretsBackend, ServicesRegistry } from "@danypops/daemon-kit/secrets-backend";
+import { registerSharedSecretsCommand, runSecretsCommand as runGenericSecretsCommand, type SecretsContribution } from "@danypops/vehicle-client-pi/secrets-tui";
+import type { SecretsBackend, ServicesRegistry } from "@danypops/vehicle-client-pi/secrets-backend";
 import { type ApiKeyFormResult, ApiKeyRegistrationForm } from "./apikey-form.ts";
 import { defaultEnvVarName } from "../../src/backend-env-mapping.ts";
 import { type BrowserOpener, openInBrowser } from "../../src/browser-launcher.ts";
@@ -289,7 +289,7 @@ export async function loginBackendFlow(
 }
 
 /**
- * Enigma's own contribution to daemon-kit's shared /secrets namespace --
+ * Enigma's own contribution to vehicle-client-pi's shared /secrets namespace --
  * Enigma is one pluggable backend among possibly several sharing that
  * command (pipes, tickets), not the assumed target, even on a machine
  * running only Enigma. The device-flow/static-token login menu the
@@ -355,7 +355,7 @@ export async function runSecretsCommand(
 }
 
 export default function (pi: ExtensionAPI): void {
-	// Contributes to the shared /secrets namespace (daemon-kit's
+	// Contributes to the shared /secrets namespace (vehicle-client-pi's
 	// registerSharedSecretsCommand) instead of a standalone command --
 	// pipes and tickets contribute the same way, so whichever of the three
 	// loads first in a given Pi session ends up claiming the real command

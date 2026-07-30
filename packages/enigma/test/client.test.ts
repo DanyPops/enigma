@@ -3,7 +3,7 @@ import { describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { serveUnixRpc } from "@danypops/daemon-kit/unix-rpc-server";
+import { serveUnixRpc } from "@danypops/vehicle-server/unix-rpc-server";
 import { connectEnigmaClient } from "../src/client.ts";
 import { createClientRegistry } from "../src/client-registry.ts";
 import { createCredentialVault } from "../src/credential-vault.ts";

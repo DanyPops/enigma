@@ -8,13 +8,13 @@
  * runSecretsCommand itself gets a handful of thin wiring smoke tests
  * confirming the real pieces are plugged in (the Enigma-backed
  * SecretsBackend, the login extraAction) -- not exhaustive coverage of
- * behavior daemon-kit's own secrets-tui.test.ts already owns.
+ * behavior vehicle-client-pi's own secrets-tui.test.ts already owns.
  */
 import { describe, expect, it } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
-import { SECRETS_MENU } from "@danypops/daemon-kit/secrets-tui";
-import { __resetSecretsRegistryForTests, listSecretsContributors } from "@danypops/daemon-kit/secrets-registry";
+import type { RefreshableAccessToken } from "@danypops/vehicle-server/vault";
+import { SECRETS_MENU } from "@danypops/vehicle-client-pi/secrets-tui";
+import { __resetSecretsRegistryForTests, listSecretsContributors } from "@danypops/vehicle-client-pi/secrets-registry";
 import type { EnigmaAdminClient, VaultCredential } from "../../src/client.ts";
 import type { CredentialVault } from "../../src/credential-vault.ts";
 import { buildEnigmaSecretsContribution, default as enigmaExtension, LOGIN_ACTION, loginBackendFlow, type LoginFns, runSecretsCommand, type PickFromList } from "../src/index.ts";
@@ -141,7 +141,7 @@ function fakeLoginFns(overrides: Partial<LoginFns> = {}): LoginFns & { calls: Re
 
 // ── runSecretsCommand: Enigma-specific pre-flight + wiring, thin ───────────
 
-describe("runSecretsCommand: pre-flight (Enigma-specific, not covered by daemon-kit's own tests)", () => {
+describe("runSecretsCommand: pre-flight (Enigma-specific, not covered by vehicle-client-pi's own tests)", () => {
 	// connect() is lazy (see buildEnigmaSecretsContribution's own doc comment): a
 	// contribution is merged with every other /secrets consumer's before any menu
 	// renders, so a connection failure must surface through the same per-backend
@@ -198,7 +198,7 @@ describe("runSecretsCommand: pre-flight (Enigma-specific, not covered by daemon-
 	});
 });
 
-describe("runSecretsCommand: wiring smoke tests (behavior itself owned by daemon-kit's secrets-tui.test.ts)", () => {
+describe("runSecretsCommand: wiring smoke tests (behavior itself owned by vehicle-client-pi's secrets-tui.test.ts)", () => {
 	it("plugs the real Enigma-backed SecretsBackend in -- rotating through the menu calls the real client", async () => {
 		const { ctx } = fakeCtx();
 		const client = fakeVaultClient({ github: { accessToken: REAL_LOOKING_TOKEN } });

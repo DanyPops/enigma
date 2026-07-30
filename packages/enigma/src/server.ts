@@ -4,9 +4,9 @@
  * client's own token may only call GET /creds/:backend (scoped to its
  * registered backends) and GET /whoami (its own name + backend list).
  */
-import { errorResponse, extractBearerToken, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "@danypops/daemon-kit/http";
-import type { Logger } from "@danypops/daemon-kit/logging";
-import type { PeerCredential } from "@danypops/daemon-kit/unix-peer-cred";
+import { errorResponse, extractBearerToken, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "@danypops/vehicle-server/rpc-http";
+import type { Logger } from "@danypops/vehicle-server/logging";
+import type { PeerCredential } from "@danypops/vehicle-server/unix-peer-cred";
 import { normalizeBackendName } from "./backend-env-mapping.ts";
 import { resolveRefreshFn } from "./backend-refresh.ts";
 import { ClientAlreadyRegisteredError, ClientNotFoundError, UidAlreadyBoundError, type ClientRegistration, type ClientRegistry } from "./client-registry.ts";
@@ -256,7 +256,7 @@ export interface UnixSocketIdentityOptions {
 }
 
 /**
- * Builds a request handler for `@danypops/daemon-kit/unix-rpc-server`'s
+ * Builds a request handler for `@danypops/vehicle-server/unix-rpc-server`'s
  * `serveUnixRpc`: identity comes only from the kernel-verified peer uid
  * SO_PEERCRED already resolved before this is ever called, never from an
  * Authorization header a peer could present over this transport (there is

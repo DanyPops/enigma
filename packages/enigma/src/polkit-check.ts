@@ -9,7 +9,7 @@
  */
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import type { PeerCredential } from "@danypops/daemon-kit/unix-peer-cred";
+import type { PeerCredential } from "@danypops/vehicle-server/unix-peer-cred";
 
 /** The one action this hook exists for today -- see contrib/polkit/ for the matching .policy file operators install. */
 export const ENIGMA_MANAGE_CLIENTS_ACTION_ID = "com.danypops.enigma.manage-clients";

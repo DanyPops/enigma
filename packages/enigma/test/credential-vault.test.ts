@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createEncryptedFileStore } from "@danypops/daemon-kit/vault";
+import { createEncryptedFileStore } from "@danypops/vehicle-server/vault";
 import { createCredentialVault } from "../src/credential-vault.ts";
 
 function tmpVault() {

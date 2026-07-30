@@ -2,9 +2,9 @@
  * Backend-agnostic credential storage: enigma knows backend *names*
  * ("github", "gitlab", "jira", "jenkins") and the generic credential
  * shape, never a specific backend's orchestration. One encrypted file per
- * backend under `credentialsDir`, via daemon-kit's AES-256-GCM store.
+ * backend under `credentialsDir`, via vehicle-server's AES-256-GCM store.
  */
-import { createEncryptedFileStore, type RefreshableAccessToken } from "@danypops/daemon-kit/vault";
+import { createEncryptedFileStore, type RefreshableAccessToken } from "@danypops/vehicle-server/vault";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeBackendName } from "./backend-env-mapping.ts";

@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Logger } from "@danypops/daemon-kit/logging";
+import type { Logger } from "@danypops/vehicle-server/logging";
 import type { OidcFetch } from "../src/login-command.ts";
 import type { EnigmaAdminClient, VaultCredential } from "../src/client.ts";
 import { createClientRegistry } from "../src/client-registry.ts";

@@ -1,9 +1,9 @@
-/** Bun composition root: binds and serves the vault via @danypops/daemon-kit's runDaemonProcess. */
+/** Bun composition root: binds and serves the vault via @danypops/vehicle-server's runDaemonProcess. */
 import { dirname, join } from "node:path";
-import { runDaemonProcess } from "@danypops/daemon-kit/daemon";
-import { createLogger } from "@danypops/daemon-kit/logging";
-import { ensureAuthToken } from "@danypops/daemon-kit/paths";
-import { serveUnixRpc } from "@danypops/daemon-kit/unix-rpc-server";
+import { runDaemonProcess } from "@danypops/vehicle-server/daemon";
+import { createLogger } from "@danypops/vehicle-server/logging";
+import { ensureAuthToken } from "@danypops/vehicle-server/paths";
+import { serveUnixRpc } from "@danypops/vehicle-server/unix-rpc-server";
 import { ADMIN_SOCKET_FILENAME } from "./constants.ts";
 import { createClientRegistry } from "./client-registry.ts";
 import { createCredentialVault, type CredentialVault } from "./credential-vault.ts";

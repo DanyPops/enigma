@@ -1,8 +1,8 @@
 /**
- * Enigma as one pluggable daemon-kit SecretsBackend, not the assumed target
- * of /secrets. Lives here (not in daemon-kit) because it wraps
+ * Enigma as one pluggable vehicle-client-pi SecretsBackend, not the assumed target
+ * of /secrets. Lives here (not in vehicle-client-pi) because it wraps
  * EnigmaAdminClient's own wire protocol -- vendor-specific, same reason
- * enigma-client itself stays out of daemon-kit.
+ * enigma-client itself stays out of vehicle-client-pi.
  *
  * list()/get() stay redaction-safe by construction: every SecretRecord
  * field comes from toRecord()'s explicit allow-list, never
@@ -13,7 +13,7 @@
  * performReveal is what actually gates this to a real interactive TUI
  * session; this adapter has no opinion on who's allowed to call it.
  */
-import type { SecretRecord, SecretsBackend } from "@danypops/daemon-kit/secrets-backend";
+import type { SecretRecord, SecretsBackend } from "@danypops/vehicle-client-pi/secrets-backend";
 import type { EnigmaAdminClient, VaultCredential } from "./client.ts";
 
 const SOURCE = "enigma";

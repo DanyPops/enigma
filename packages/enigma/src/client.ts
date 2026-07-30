@@ -1,8 +1,8 @@
 /** Enigma's own CLI talking to its own running server, admin-token-authenticated (or, when available, SO_PEERCRED-authenticated over the Unix socket -- no token needed at all). */
 import { existsSync, readFileSync } from "node:fs";
 import { ENIGMA_SYSTEM_RUNTIME_HANDLE, resolveAdminSocketPath, resolveHandle } from "@danypops/enigma-client";
-import { connectUnixRpc } from "@danypops/daemon-kit/unix-rpc-client";
-import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
+import { connectUnixRpc } from "@danypops/vehicle-client/unix-rpc-client";
+import type { RefreshableAccessToken } from "@danypops/vehicle-server/vault";
 import { resolveEnigmaPaths } from "./paths.ts";
 
 export type VaultCredential = RefreshableAccessToken;

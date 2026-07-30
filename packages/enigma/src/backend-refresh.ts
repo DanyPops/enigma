@@ -13,7 +13,7 @@
  * rather than public-client, and its refresh tokens rotate on every use
  * rather than persisting.
  */
-import type { RefreshableAccessToken } from "@danypops/daemon-kit/vault";
+import type { RefreshableAccessToken } from "@danypops/vehicle-server/vault";
 import * as oidc from "openid-client";
 import type { OidcFetch } from "./login-command.ts";
 

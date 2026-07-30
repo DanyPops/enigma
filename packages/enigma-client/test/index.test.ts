@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { serveUnixRpc } from "@danypops/daemon-kit/unix-rpc-server";
+import { serveUnixRpc } from "@danypops/vehicle-server/unix-rpc-server";
 import { addEnigmaClient, removeEnigmaClient, resolveAdminSocketPath, resolveHandle, rotateEnigmaClient, tryEnigmaAccessToken, tryEnigmaCredential, tryEnigmaWhoAmI } from "../src/index.ts";
 
 function tmpXdg(): { dir: string; env: { XDG_RUNTIME_DIR: string; XDG_STATE_HOME: string } } {
