@@ -17,6 +17,7 @@
         "@danypops/vehicle-client-pi": "^0.1.5",
         "@danypops/vehicle-server": "^0.1.1",
         "@napi-rs/keyring": "^1.3.0",
+        "malevich-tui-components": "^0.2.0",
         "open": "^11.0.0",
         "openid-client": "^6.8.4",
       },

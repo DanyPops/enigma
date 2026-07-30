@@ -1,5 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { ApiKeyRegistrationForm, MaskedInput } from "../src/apikey-form.ts";
+import { ApiKeyRegistrationForm } from "../src/apikey-form.ts";
+
+// MaskedInput itself is malevich-tui-components' own component now -- its generic
+// behavior (paste handling, backspace, mask rendering) is covered by Malevich's
+// own test suite, not duplicated here. This file keeps only enigma-specific
+// behavior: the form wiring, and the ctrl+h backspace alias this form's own
+// pre-Malevich copy explicitly supported (folded into a wrapped matchesKey,
+// see apikey-form.ts).
 
 const NOOP_THEME = {
 	label: (s: string) => s,
@@ -12,65 +19,25 @@ const TAB = "\t";
 const SHIFT_TAB = "\x1b[Z";
 const ENTER = "\r";
 const ESCAPE = "\x1b";
-const BACKSPACE = "\x7f";
+const CTRL_H = "\x08";
 
 function type(target: { handleInput(data: string): void }, text: string): void {
 	for (const ch of text) target.handleInput(ch);
 }
 
-describe("MaskedInput", () => {
-	it("tracks the real value but never renders it -- only mask glyphs, one per character", () => {
-		const input = new MaskedInput();
-		type(input, "sk-secret");
-		expect(input.getValue()).toBe("sk-secret");
-		const rendered = input.render(80)[0] ?? "";
-		expect(rendered).not.toContain("sk-secret");
-		expect(rendered).toBe("•".repeat("sk-secret".length));
-	});
-
-	it("backspace removes the last character from the real value and shortens the mask", () => {
-		const input = new MaskedInput();
-		type(input, "abc");
-		input.handleInput(BACKSPACE);
-		expect(input.getValue()).toBe("ab");
-		expect(input.render(80)[0]).toBe("••");
-	});
-
-	it("ignores escape sequences (e.g. arrow keys) instead of inserting them as characters", () => {
-		const input = new MaskedInput();
-		input.handleInput("\x1b[D"); // left arrow
-		expect(input.getValue()).toBe("");
-	});
-
-	it("accepts a bracketed-paste sequence (Ctrl+V/Ctrl+Shift+V in most terminals) as one chunk, unlike a plain escape sequence", () => {
-		const input = new MaskedInput();
-		input.handleInput("\x1b[200~sk-pasted-secret-value\x1b[201~");
-		expect(input.getValue()).toBe("sk-pasted-secret-value");
-		expect(input.render(80)[0]).toBe("•".repeat("sk-pasted-secret-value".length));
-	});
-
-	it("buffers a bracketed paste split across multiple handleInput calls (a long paste arriving in several PTY chunks)", () => {
-		const input = new MaskedInput();
-		input.handleInput("\x1b[200~sk-pas");
-		input.handleInput("ted-secre");
-		input.handleInput("t-value\x1b[201~");
-		expect(input.getValue()).toBe("sk-pasted-secret-value");
-	});
-
-	it("strips a trailing newline from a pasted value (common clipboard artifact) without corrupting the key", () => {
-		const input = new MaskedInput();
-		input.handleInput("\x1b[200~sk-secret\n\x1b[201~");
-		expect(input.getValue()).toBe("sk-secret");
-	});
-
-	it("processes input typed immediately after a paste ends in the same chunk", () => {
-		const input = new MaskedInput();
-		input.handleInput("\x1b[200~pasted\x1b[201~typed");
-		expect(input.getValue()).toBe("pastedtyped");
-	});
-});
-
 describe("ApiKeyRegistrationForm", () => {
+	it("ctrl+h also removes the last character in the value field, preserving this form's pre-Malevich behavior", () => {
+		const form = new ApiKeyRegistrationForm(NOOP_THEME, "brave", "BRAVE_SEARCH_API_KEY");
+		form.handleInput(TAB);
+		form.handleInput(TAB); // focus the value field
+		type(form, "abc");
+		form.handleInput(CTRL_H);
+		let result: unknown;
+		form.onSubmit = (r) => { result = r; };
+		form.handleInput(ENTER);
+		expect((result as { value: string }).value).toBe("ab");
+	});
+
 	it("starts focused on the name field and moves focus forward on Tab/Enter, backward on Shift+Tab", () => {
 		const form = new ApiKeyRegistrationForm(NOOP_THEME);
 		type(form, "brave");

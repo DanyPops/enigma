@@ -9,67 +9,16 @@
  * `ctx.ui.custom()` component rather than reusing the built-in dialog.
  */
 import { type Component, Input, Key, matchesKey } from "@earendil-works/pi-tui";
+import { MaskedInput } from "malevich-tui-components";
 
 /**
- * Single-line input that tracks a real value but renders only mask glyphs.
- * Deliberately does not implement Focusable/IME cursor positioning --
- * every real password-style field in ordinary software skips IME preview
- * for the same privacy reason, and skipping it here is a deliberate
- * choice, not an oversight.
+ * Malevich's MaskedInput only ever asks its injected matcher about "backspace" --
+ * ctrl+h was a separate, explicit alias in this form's own pre-Malevich copy, so
+ * it's folded in here rather than dropped when delegating everything else to
+ * pi-tui's real matchesKey.
  */
-const PASTE_START = "\x1b[200~";
-const PASTE_END = "\x1b[201~";
-
-export class MaskedInput implements Component {
-	private value = "";
-	// Bracketed-paste buffering -- mirrors pi-tui's own Input component. Without
-	// this, a terminal paste (Ctrl+V/Ctrl+Shift+V, most Linux terminals) arrives
-	// wrapped in PASTE_START/PASTE_END and starts with \x1b, so the plain
-	// escape-sequence filter below would otherwise silently drop the whole paste.
-	private pasteBuffer = "";
-	private isInPaste = false;
-
-	getValue(): string {
-		return this.value;
-	}
-
-	handleInput(data: string): void {
-		if (data.includes(PASTE_START)) {
-			this.isInPaste = true;
-			this.pasteBuffer = "";
-			data = data.replace(PASTE_START, "");
-		}
-		if (this.isInPaste) {
-			this.pasteBuffer += data;
-			const endIndex = this.pasteBuffer.indexOf(PASTE_END);
-			if (endIndex !== -1) {
-				const pasted = this.pasteBuffer.slice(0, endIndex).replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, "");
-				this.value += pasted;
-				this.isInPaste = false;
-				const remaining = this.pasteBuffer.slice(endIndex + PASTE_END.length);
-				this.pasteBuffer = "";
-				if (remaining) this.handleInput(remaining);
-			}
-			return;
-		}
-		if (matchesKey(data, Key.backspace) || matchesKey(data, "ctrl+h")) {
-			this.value = this.value.slice(0, -1);
-			return;
-		}
-		// Printable characters only; control/escape sequences (arrows, function
-		// keys, ...) are not masked-in -- there is nothing meaningful to insert.
-		if (data.length >= 1 && !data.startsWith("\x1b") && data.charCodeAt(0) >= 32) {
-			this.value += data;
-		}
-	}
-
-	render(width: number): string[] {
-		const masked = "•".repeat(this.value.length);
-		return [masked.length > width ? masked.slice(masked.length - width) : masked];
-	}
-
-	invalidate(): void {}
-}
+const matchesKeyWithCtrlHBackspace = (data: string, keyId: string): boolean =>
+	keyId === "backspace" ? matchesKey(data, Key.backspace) || matchesKey(data, "ctrl+h") : matchesKey(data, keyId as Parameters<typeof matchesKey>[1]);
 
 export interface ApiKeyFormResult {
 	name: string;
@@ -108,7 +57,7 @@ export class ApiKeyRegistrationForm implements Component {
 		this.fields = [
 			{ label: "Backend name", input: nameInput },
 			{ label: "Env var name", input: envVarInput },
-			{ label: "API key value", input: new MaskedInput() },
+			{ label: "API key value", input: new MaskedInput({ matchesKey: matchesKeyWithCtrlHBackspace }) },
 		];
 	}
 
