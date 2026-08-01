@@ -1,5 +1,5 @@
-import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "bun:test";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -215,7 +215,11 @@ describe("connectEnigmaClient: Unix-socket transport, no token needed at all", (
 		// A live TCP server the operator's own real admin token still works against.
 		mkdirSync(join(paths.token, ".."), { recursive: true });
 		writeFileSync(paths.token, realAdminToken);
-		const tcpServer = fixtureServer((request) => (request.headers.get("authorization") === `Bearer ${realAdminToken}` ? new Response(JSON.stringify(["tcp-token-still-works"]), { headers: { "content-type": "application/json" } }) : new Response("unauthorized", { status: 401 })));
+		const tcpServer = fixtureServer((request) =>
+			request.headers.get("authorization") === `Bearer ${realAdminToken}`
+				? new Response(JSON.stringify(["tcp-token-still-works"]), { headers: { "content-type": "application/json" } })
+				: new Response("unauthorized", { status: 401 }),
+		);
 		writeHandle(paths.handle, tcpServer.port);
 
 		try {
@@ -237,7 +241,11 @@ describe("connectEnigmaClient: Unix-socket transport, no token needed at all", (
 		try {
 			mkdirSync(join(paths.token, ".."), { recursive: true });
 			writeFileSync(paths.token, "f".repeat(64));
-			server = fixtureServer((request) => (request.headers.get("authorization") === `Bearer ${"f".repeat(64)}` ? new Response(JSON.stringify(["tcp-fallback"]), { headers: { "content-type": "application/json" } }) : new Response("unauthorized", { status: 401 })));
+			server = fixtureServer((request) =>
+				request.headers.get("authorization") === `Bearer ${"f".repeat(64)}`
+					? new Response(JSON.stringify(["tcp-fallback"]), { headers: { "content-type": "application/json" } })
+					: new Response("unauthorized", { status: 401 }),
+			);
 			writeHandle(paths.handle, server.port);
 			// Deliberately no admin.sock written -- proves the fallback still works end to end.
 			// (The *socket* fallback is real system state either way; unreachableFallback here

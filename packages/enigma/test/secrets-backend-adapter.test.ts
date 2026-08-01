@@ -40,7 +40,12 @@ describe("createEnigmaSecretsBackend", () => {
 	it("get() surfaces expiresAt", async () => {
 		const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
 		const client = fakeClient({ jenkins: { accessToken: "x", expiresAt } });
-		expect(await createEnigmaSecretsBackend(client).get("jenkins")).toEqual({ name: "jenkins", source: "enigma", configured: true, expiresAt });
+		expect(await createEnigmaSecretsBackend(client).get("jenkins")).toEqual({
+			name: "jenkins",
+			source: "enigma",
+			configured: true,
+			expiresAt,
+		});
 	});
 
 	it("rotate() delegates to the client's own rotateCredential", async () => {
@@ -56,7 +61,9 @@ describe("createEnigmaSecretsBackend", () => {
 	});
 
 	it("reveal() returns the full credential unredacted, unlike get()/list()", async () => {
-		const client = fakeClient({ github: { accessToken: "gho_real_value", refreshToken: "refresh_real_value", scope: "repo", extra: { cloudId: "abc" } } });
+		const client = fakeClient({
+			github: { accessToken: "gho_real_value", refreshToken: "refresh_real_value", scope: "repo", extra: { cloudId: "abc" } },
+		});
 		expect(await createEnigmaSecretsBackend(client).reveal("github")).toEqual({
 			accessToken: "gho_real_value",
 			refreshToken: "refresh_real_value",

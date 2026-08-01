@@ -2,13 +2,20 @@
 import { addEnigmaClient, removeEnigmaClient, rotateEnigmaClient } from "@danypops/enigma-client";
 import { openInBrowser } from "./browser-launcher.ts";
 import { connectEnigmaClient, type EnigmaAdminClient } from "./client.ts";
-import { ClientAlreadyRegisteredError, ClientNotFoundError, createClientRegistry, UidAlreadyBoundError, type ClientRegistry } from "./client-registry.ts";
+import {
+	ClientAlreadyRegisteredError,
+	ClientNotFoundError,
+	type ClientRegistry,
+	createClientRegistry,
+	UidAlreadyBoundError,
+} from "./client-registry.ts";
 import { createCredentialVault } from "./credential-vault.ts";
 import { serveMain } from "./daemon.ts";
 import { loginApiKey, loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc } from "./login-command.ts";
 import { promptMaskedSecret } from "./masked-prompt.ts";
 
 const JIRA_DEFAULT_CALLBACK_PORT = 8976;
+
 import { defaultEnvVarName, normalizeBackendName } from "./backend-env-mapping.ts";
 import { MasterKeyFailure, resolveConfiguredMasterKey } from "./master-key.ts";
 import { resolveEnigmaExtraPaths, resolveEnigmaPaths } from "./paths.ts";
@@ -38,7 +45,9 @@ async function loginMain(backend: string | undefined): Promise<void> {
 	if (backend === "github") {
 		const clientId = process.env.GITHUB_CLIENT_ID;
 		if (!clientId) {
-			console.error("GITHUB_CLIENT_ID is required — register a personal OAuth App with Device Flow enabled at github.com/settings/developers");
+			console.error(
+				"GITHUB_CLIENT_ID is required — register a personal OAuth App with Device Flow enabled at github.com/settings/developers",
+			);
 			process.exit(1);
 		}
 		const token = await loginGitHub({
@@ -61,7 +70,9 @@ async function loginMain(backend: string | undefined): Promise<void> {
 		const baseUrl = process.env.GITLAB_URL;
 		const clientId = process.env.GITLAB_CLIENT_ID;
 		if (!baseUrl || !clientId) {
-			console.error("GITLAB_URL and GITLAB_CLIENT_ID are required — register a personal Application under your GitLab instance's User Settings > Applications");
+			console.error(
+				"GITLAB_URL and GITLAB_CLIENT_ID are required — register a personal Application under your GitLab instance's User Settings > Applications",
+			);
 			process.exit(1);
 		}
 		const token = await loginGitLab({
@@ -88,7 +99,9 @@ async function loginMain(backend: string | undefined): Promise<void> {
 		const scope = parseFlag(process.argv, "--scope");
 		const envVar = parseFlag(process.argv, "--env-var");
 		if (!rawName || !issuerUrl || !clientId) {
-			console.error("usage: enigma login oidc --name <arbitrary-name> --issuer <url> --client-id <id> [--scope <scope>] [--env-var <VAR_NAME>]");
+			console.error(
+				"usage: enigma login oidc --name <arbitrary-name> --issuer <url> --client-id <id> [--scope <scope>] [--env-var <VAR_NAME>]",
+			);
 			process.exit(1);
 		}
 		const name = normalizeBackendName(rawName);
@@ -117,7 +130,7 @@ async function loginMain(backend: string | undefined): Promise<void> {
 		if (!clientId || !clientSecret) {
 			console.error(
 				"GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required — register a Desktop app OAuth client at console.cloud.google.com/apis/credentials, " +
-					"and enable the Drive API and Docs API for the project. Note: a client left in \"Testing\" publishing status has refresh tokens that expire after 7 days.",
+					'and enable the Drive API and Docs API for the project. Note: a client left in "Testing" publishing status has refresh tokens that expire after 7 days.',
 			);
 			process.exit(1);
 		}
@@ -174,7 +187,9 @@ async function loginMain(backend: string | undefined): Promise<void> {
 	if (backend === "jenkins") {
 		const { JENKINS_URL: url, JENKINS_USER: username, JENKINS_API_TOKEN: apiToken } = process.env;
 		if (!url || !username || !apiToken) {
-			console.error("JENKINS_URL, JENKINS_USER, and JENKINS_API_TOKEN are required — generate an API token from your Jenkins user's Configure page");
+			console.error(
+				"JENKINS_URL, JENKINS_USER, and JENKINS_API_TOKEN are required — generate an API token from your Jenkins user's Configure page",
+			);
 			process.exit(1);
 		}
 		vault.save(alias ?? "jenkins", loginJenkins({ url, username, apiToken }));
@@ -330,7 +345,10 @@ export async function clientMain(args: string[], deps: ClientMainDeps = {}): Pro
 				console.error(`--uid must be a non-negative integer, got "${uidFlag}"`);
 				process.exit(1);
 			}
-			const backends = backendsFlag.split(",").map((b) => b.trim()).filter(Boolean);
+			const backends = backendsFlag
+				.split(",")
+				.map((b) => b.trim())
+				.filter(Boolean);
 
 			const viaRpc = await tryAddViaRpc({ name, backends, uid });
 			if (viaRpc !== undefined && !(!viaRpc.ok && shouldFallBackToLocalFile(viaRpc.status))) {
@@ -433,7 +451,9 @@ export async function clientMain(args: string[], deps: ClientMainDeps = {}): Pro
 			break;
 		}
 		default:
-			console.error("usage: enigma client <add|rotate|remove|list>\n  add <name> --backends <list>  register a new consumer, print its token once\n  rotate <name>                 reissue a client's token, invalidating the old one\n  remove <name>                 delete a registration, invalidating its token\n  list                          show registered clients and their allowed backends (no tokens)");
+			console.error(
+				"usage: enigma client <add|rotate|remove|list>\n  add <name> --backends <list>  register a new consumer, print its token once\n  rotate <name>                 reissue a client's token, invalidating the old one\n  remove <name>                 delete a registration, invalidating its token\n  list                          show registered clients and their allowed backends (no tokens)",
+			);
 			process.exit(1);
 	}
 }

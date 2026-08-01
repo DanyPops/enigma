@@ -5,8 +5,8 @@
  * the encryption, or the HTTP round-trip.
  */
 import { describe, expect, it } from "bun:test";
-import { randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -167,7 +167,12 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 			expect(first.code).toBe(0);
 			expect(first.stdout).toContain("Jenkins credentials saved.");
 
-			const secondEnv = { ...env, JENKINS_URL: "https://staging.jenkins.example.com", JENKINS_USER: "staging-bot", JENKINS_API_TOKEN: "second-account-tok" };
+			const secondEnv = {
+				...env,
+				JENKINS_URL: "https://staging.jenkins.example.com",
+				JENKINS_USER: "staging-bot",
+				JENKINS_API_TOKEN: "second-account-tok",
+			};
 			const second = await runCli(["login", "jenkins", "--as", "jenkins-staging"], secondEnv);
 			expect(second.code).toBe(0);
 			expect(second.stdout).toContain('Jenkins credentials saved (stored as "jenkins-staging").');
@@ -270,7 +275,9 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 
 				const list = await runCli(["client", "list"], env);
 				expect(list.code).toBe(0);
-				expect(JSON.parse(list.stdout)).toEqual([{ name: "acme-consumer", backends: ["widgetapi"], createdAt: expect.any(String), uid: 999999 }]);
+				expect(JSON.parse(list.stdout)).toEqual([
+					{ name: "acme-consumer", backends: ["widgetapi"], createdAt: expect.any(String), uid: 999999 },
+				]);
 			} finally {
 				proc.kill("SIGTERM");
 				await proc.exited;
@@ -332,7 +339,9 @@ describe("enigma walking skeleton (real CLI subprocess)", () => {
 	it("pins Secret Service across separate login and daemon processes when a desktop service is available", async () => {
 		const dbusAddress = process.env.DBUS_SESSION_BUS_ADDRESS;
 		if (!dbusAddress) return;
-		const probe = spawnSync("/usr/bin/secret-tool", ["lookup", "service", "__enigma_probe_missing__", "username", "master"], { maxBuffer: 4096 });
+		const probe = spawnSync("/usr/bin/secret-tool", ["lookup", "service", "__enigma_probe_missing__", "username", "master"], {
+			maxBuffer: 4096,
+		});
 		if (probe.error || probe.status !== 1 || probe.stderr.length !== 0) return;
 
 		const dir = tmpDir();

@@ -61,7 +61,8 @@ export async function startEnigmaTestHarness(): Promise<EnigmaTestHarness> {
 			vault.save(backend, { accessToken, extra });
 		},
 		stop: () => {
-			server.stop(true);
+			// Fire-and-forget: test cleanup never needs to wait for the socket to fully close.
+			void server.stop(true);
 			rmSync(dir, { recursive: true, force: true });
 		},
 	};

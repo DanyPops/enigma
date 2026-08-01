@@ -4,12 +4,26 @@
  * client's own token may only call GET /creds/:backend (scoped to its
  * registered backends) and GET /whoami (its own name + backend list).
  */
-import { errorResponse, extractBearerToken, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "@danypops/vehicle-server/rpc-http";
+
 import type { Logger } from "@danypops/vehicle-server/logging";
+import {
+	errorResponse,
+	extractBearerToken,
+	healthResponse,
+	jsonResponse,
+	readyResponse,
+	requireBearerToken,
+} from "@danypops/vehicle-server/rpc-http";
 import type { PeerCredential } from "@danypops/vehicle-server/unix-peer-cred";
 import { normalizeBackendName } from "./backend-env-mapping.ts";
 import { resolveRefreshFn } from "./backend-refresh.ts";
-import { ClientAlreadyRegisteredError, ClientNotFoundError, UidAlreadyBoundError, type ClientRegistration, type ClientRegistry } from "./client-registry.ts";
+import {
+	ClientAlreadyRegisteredError,
+	ClientNotFoundError,
+	type ClientRegistration,
+	type ClientRegistry,
+	UidAlreadyBoundError,
+} from "./client-registry.ts";
 import type { CredentialVault } from "./credential-vault.ts";
 import type { OidcFetch } from "./login-command.ts";
 import { ENIGMA_MANAGE_CLIENTS_ACTION_ID, type PolkitCheck } from "./polkit-check.ts";
@@ -65,7 +79,9 @@ function identityFromBearer(request: Request, deps: ServerDeps): Identity {
 function auditIdentity(identity: Identity): Record<string, unknown> {
 	if (identity.kind === "none") return { identity: "none" };
 	const uidField = identity.uid !== undefined ? { uid: identity.uid } : {};
-	return identity.kind === "admin" ? { identity: "admin", ...uidField } : { identity: "client", client: identity.registration.name, ...uidField };
+	return identity.kind === "admin"
+		? { identity: "admin", ...uidField }
+		: { identity: "client", client: identity.registration.name, ...uidField };
 }
 
 /**
@@ -74,7 +90,13 @@ function auditIdentity(identity: Identity): Record<string, unknown> {
  * when, and what happened), not merely a redacted display. Never logs the
  * credential value itself, only the fact and outcome of the access.
  */
-function auditCredentialEvent(deps: ServerDeps, event: string, backend: string, identity: Identity, outcome: "ok" | "denied" | "not_found" | "unauthenticated"): void {
+function auditCredentialEvent(
+	deps: ServerDeps,
+	event: string,
+	backend: string,
+	identity: Identity,
+	outcome: "ok" | "denied" | "not_found" | "unauthenticated",
+): void {
 	deps.logger?.info(event, { backend, outcome, ...auditIdentity(identity) });
 }
 
@@ -153,7 +175,13 @@ async function handleRequest(request: Request, deps: ServerDeps, identity: Ident
 			return errorResponse("malformed JSON body", 400);
 		}
 		const { name, backends, uid } = body;
-		if (typeof name !== "string" || !name || !Array.isArray(backends) || backends.length === 0 || !backends.every((b) => typeof b === "string")) {
+		if (
+			typeof name !== "string" ||
+			!name ||
+			!Array.isArray(backends) ||
+			backends.length === 0 ||
+			!backends.every((b) => typeof b === "string")
+		) {
 			return errorResponse("name (string) and backends (non-empty string array) are required", 400);
 		}
 		if (uid !== undefined && (typeof uid !== "number" || !Number.isInteger(uid) || uid < 0)) {

@@ -8,14 +8,20 @@
  */
 import { createInterface } from "node:readline";
 
-export function promptMaskedSecret(promptText: string, input: NodeJS.ReadableStream = process.stdin, output: NodeJS.WritableStream = process.stdout): Promise<string> {
+export function promptMaskedSecret(
+	promptText: string,
+	input: NodeJS.ReadableStream = process.stdin,
+	output: NodeJS.WritableStream = process.stdout,
+): Promise<string> {
 	const isTTY = (input as NodeJS.ReadStream).isTTY === true;
 
 	if (!isTTY) {
 		return new Promise((resolve, reject) => {
 			let data = "";
 			input.setEncoding?.("utf8");
-			input.on("data", (chunk) => { data += chunk; });
+			input.on("data", (chunk) => {
+				data += chunk;
+			});
 			input.on("end", () => resolve(data.split("\n")[0]?.trim() ?? ""));
 			input.on("error", reject);
 		});

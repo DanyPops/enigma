@@ -1,5 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { loginApiKey, loginGitHub, loginGitLab, loginGoogle, loginJenkins, loginJiraCloud, loginOidc, type JiraCallbackListener, type OidcFetch } from "../src/login-command.ts";
+import {
+	type JiraCallbackListener,
+	loginApiKey,
+	loginGitHub,
+	loginGitLab,
+	loginGoogle,
+	loginJenkins,
+	loginJiraCloud,
+	loginOidc,
+	type OidcFetch,
+} from "../src/login-command.ts";
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -11,7 +21,13 @@ describe("loginGitHub", () => {
 		const fetchImpl: OidcFetch = async (input) => {
 			const url = String(input);
 			if (url === "https://github.com/login/device/code") {
-				return jsonResponse({ device_code: "d1", user_code: "ABCD-1234", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 1 });
+				return jsonResponse({
+					device_code: "d1",
+					user_code: "ABCD-1234",
+					verification_uri: "https://github.com/login/device",
+					expires_in: 900,
+					interval: 1,
+				});
 			}
 			if (url === "https://github.com/login/oauth/access_token") {
 				polls += 1;
@@ -31,7 +47,13 @@ describe("loginGitHub", () => {
 		const fetchImpl: OidcFetch = async (input) => {
 			const url = String(input);
 			if (url === "https://github.com/login/device/code") {
-				return jsonResponse({ device_code: "d1", user_code: "ABCD-1234", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 1 });
+				return jsonResponse({
+					device_code: "d1",
+					user_code: "ABCD-1234",
+					verification_uri: "https://github.com/login/device",
+					expires_in: 900,
+					interval: 1,
+				});
 			}
 			return jsonResponse({ access_token: "gho_x", token_type: "bearer" });
 		};
@@ -44,7 +66,13 @@ describe("loginGitHub", () => {
 		const fetchImpl: OidcFetch = async (input) => {
 			const url = String(input);
 			if (url === "https://github.com/login/device/code") {
-				return jsonResponse({ device_code: "d1", user_code: "X", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 1 });
+				return jsonResponse({
+					device_code: "d1",
+					user_code: "X",
+					verification_uri: "https://github.com/login/device",
+					expires_in: 900,
+					interval: 1,
+				});
 			}
 			return jsonResponse({ error: "access_denied" }, 400);
 		};
@@ -68,7 +96,13 @@ describe("loginGitLab", () => {
 			}
 			if (url === "https://gitlab.example.com/oauth/authorize_device") {
 				deviceCodeRequested = true;
-				return jsonResponse({ device_code: "d1", user_code: "WXYZ-5678", verification_uri: "https://gitlab.example.com/device", expires_in: 900, interval: 1 });
+				return jsonResponse({
+					device_code: "d1",
+					user_code: "WXYZ-5678",
+					verification_uri: "https://gitlab.example.com/device",
+					expires_in: 900,
+					interval: 1,
+				});
 			}
 			if (url === "https://gitlab.example.com/oauth/token") {
 				return jsonResponse({ access_token: "glpat-x", refresh_token: "refresh-x", expires_in: 7200, scope: "api", token_type: "bearer" });
@@ -94,7 +128,11 @@ describe("loginGitLab", () => {
 		const fetchImpl: OidcFetch = async (input) => {
 			const url = String(input);
 			if (url === "https://gitlab.example.com/.well-known/openid-configuration") {
-				return jsonResponse({ issuer: "https://gitlab.example.com", token_endpoint: "https://gitlab.example.com/oauth/token", device_authorization_endpoint: null });
+				return jsonResponse({
+					issuer: "https://gitlab.example.com",
+					token_endpoint: "https://gitlab.example.com/oauth/token",
+					device_authorization_endpoint: null,
+				});
 			}
 			return jsonResponse({ error: "Not Found" }, 404);
 		};
@@ -116,7 +154,13 @@ describe("loginOidc", () => {
 				});
 			}
 			if (url === "https://idp.example.com/device") {
-				return jsonResponse({ device_code: "d1", user_code: "OIDC-0001", verification_uri: "https://idp.example.com/activate", expires_in: 900, interval: 1 });
+				return jsonResponse({
+					device_code: "d1",
+					user_code: "OIDC-0001",
+					verification_uri: "https://idp.example.com/activate",
+					expires_in: 900,
+					interval: 1,
+				});
 			}
 			if (url === "https://idp.example.com/token") {
 				return jsonResponse({ access_token: "generic-token", refresh_token: "generic-refresh", expires_in: 3600, token_type: "bearer" });
@@ -124,7 +168,12 @@ describe("loginOidc", () => {
 			throw new Error(`unexpected fetch: ${url}`);
 		};
 		let prompted: unknown;
-		const token = await loginOidc({ issuerUrl: "https://idp.example.com", clientId: "generic-client", fetchImpl, onPrompt: (p) => (prompted = p) });
+		const token = await loginOidc({
+			issuerUrl: "https://idp.example.com",
+			clientId: "generic-client",
+			fetchImpl,
+			onPrompt: (p) => (prompted = p),
+		});
 		expect(prompted).toEqual({ verificationUri: "https://idp.example.com/activate", userCode: "OIDC-0001" });
 		expect(token.accessToken).toBe("generic-token");
 		expect(token.extra).toEqual({ issuerUrl: "https://idp.example.com", clientId: "generic-client" });
@@ -134,7 +183,11 @@ describe("loginOidc", () => {
 		const fetchImpl: OidcFetch = async (input) => {
 			const url = String(input);
 			if (url === "https://idp.example.com/.well-known/openid-configuration") {
-				return jsonResponse({ issuer: "https://idp.example.com", token_endpoint: "https://idp.example.com/token", device_authorization_endpoint: null });
+				return jsonResponse({
+					issuer: "https://idp.example.com",
+					token_endpoint: "https://idp.example.com/token",
+					device_authorization_endpoint: null,
+				});
 			}
 			throw new Error(`unexpected fetch: ${url}`);
 		};
@@ -149,7 +202,13 @@ describe("loginJiraCloud", () => {
 		return async (input) => {
 			const url = String(input);
 			if (url === "https://auth.atlassian.com/oauth/token") {
-				return jsonResponse({ access_token: "jira-at", refresh_token: "jira-rt", expires_in: 3600, scope: "read:jira-work offline_access", token_type: "bearer" });
+				return jsonResponse({
+					access_token: "jira-at",
+					refresh_token: "jira-rt",
+					expires_in: 3600,
+					scope: "read:jira-work offline_access",
+					token_type: "bearer",
+				});
 			}
 			if (url === "https://api.atlassian.com/oauth/token/accessible-resources") {
 				return jsonResponse([{ id: "cloud-1", name: "My Site", url: "https://my-site.atlassian.net", scopes: ["read:jira-work"] }]);
@@ -181,20 +240,47 @@ describe("loginJiraCloud", () => {
 		expect(authUrl).toContain("audience=api.atlassian.com");
 		expect(token.accessToken).toBe("jira-at");
 		expect(token.refreshToken).toBe("jira-rt");
-		expect(token.extra).toEqual({ clientId: "jira-client", clientSecret: "jira-secret", cloudId: "cloud-1", siteUrl: "https://my-site.atlassian.net" });
+		expect(token.extra).toEqual({
+			clientId: "jira-client",
+			clientSecret: "jira-secret",
+			cloudId: "cloud-1",
+			siteUrl: "https://my-site.atlassian.net",
+		});
 	});
 
 	it("rejects a callback whose state does not match — possible CSRF", async () => {
-		const listener: JiraCallbackListener = { redirectUri: "http://127.0.0.1:8976/callback", waitForCallback: async () => ({ code: "c", state: "wrong-state" }), close: () => {} };
+		const listener: JiraCallbackListener = {
+			redirectUri: "http://127.0.0.1:8976/callback",
+			waitForCallback: async () => ({ code: "c", state: "wrong-state" }),
+			close: () => {},
+		};
 		await expect(
-			loginJiraCloud({ clientId: "c", clientSecret: "s", callbackPort: 8976, listener, fetchImpl: async () => new Response("", { status: 500 }), onAuthUrl: () => {} }),
+			loginJiraCloud({
+				clientId: "c",
+				clientSecret: "s",
+				callbackPort: 8976,
+				listener,
+				fetchImpl: async () => new Response("", { status: 500 }),
+				onAuthUrl: () => {},
+			}),
 		).rejects.toThrow(/state mismatch/);
 	});
 
 	it("surfaces an authorization error from the callback (e.g. the user denied consent) as a real error", async () => {
-		const listener: JiraCallbackListener = { redirectUri: "http://127.0.0.1:8976/callback", waitForCallback: async () => ({ error: "access_denied" }), close: () => {} };
+		const listener: JiraCallbackListener = {
+			redirectUri: "http://127.0.0.1:8976/callback",
+			waitForCallback: async () => ({ error: "access_denied" }),
+			close: () => {},
+		};
 		await expect(
-			loginJiraCloud({ clientId: "c", clientSecret: "s", callbackPort: 8976, listener, fetchImpl: async () => new Response("", { status: 500 }), onAuthUrl: () => {} }),
+			loginJiraCloud({
+				clientId: "c",
+				clientSecret: "s",
+				callbackPort: 8976,
+				listener,
+				fetchImpl: async () => new Response("", { status: 500 }),
+				onAuthUrl: () => {},
+			}),
 		).rejects.toThrow(/access_denied/);
 	});
 
@@ -207,7 +293,8 @@ describe("loginJiraCloud", () => {
 		};
 		const fetchImpl: OidcFetch = async (input) => {
 			const url = String(input);
-			if (url === "https://auth.atlassian.com/oauth/token") return jsonResponse({ access_token: "at", expires_in: 3600, token_type: "bearer" });
+			if (url === "https://auth.atlassian.com/oauth/token")
+				return jsonResponse({ access_token: "at", expires_in: 3600, token_type: "bearer" });
 			if (url === "https://api.atlassian.com/oauth/token/accessible-resources") {
 				return jsonResponse([
 					{ id: "cloud-1", name: "Site One", url: "https://site-one.atlassian.net", scopes: [] },
@@ -239,7 +326,8 @@ describe("loginJiraCloud", () => {
 		};
 		const fetchImpl: OidcFetch = async (input) => {
 			const url = String(input);
-			if (url === "https://auth.atlassian.com/oauth/token") return jsonResponse({ access_token: "at", expires_in: 3600, token_type: "bearer" });
+			if (url === "https://auth.atlassian.com/oauth/token")
+				return jsonResponse({ access_token: "at", expires_in: 3600, token_type: "bearer" });
 			if (url === "https://api.atlassian.com/oauth/token/accessible-resources") {
 				return jsonResponse([
 					{ id: "cloud-1", name: "Site One", url: "https://site-one.atlassian.net", scopes: [] },
@@ -283,7 +371,13 @@ describe("loginGoogle", () => {
 			if (url === "https://accounts.google.com/.well-known/openid-configuration") return discoveryResponse();
 			if (url === "https://oauth2.googleapis.com/device/code") {
 				deviceAuthBody = new URLSearchParams(init?.body as string);
-				return jsonResponse({ device_code: "d1", user_code: "GOOG-0001", verification_uri: "https://google.com/device", expires_in: 900, interval: 1 });
+				return jsonResponse({
+					device_code: "d1",
+					user_code: "GOOG-0001",
+					verification_uri: "https://google.com/device",
+					expires_in: 900,
+					interval: 1,
+				});
 			}
 			if (url === "https://oauth2.googleapis.com/token") {
 				tokenAuthBody = new URLSearchParams(init?.body as string);
@@ -309,7 +403,13 @@ describe("loginGoogle", () => {
 			if (url === "https://accounts.google.com/.well-known/openid-configuration") return discoveryResponse();
 			if (url === "https://oauth2.googleapis.com/device/code") {
 				deviceAuthBody = new URLSearchParams(init?.body as string);
-				return jsonResponse({ device_code: "d1", user_code: "X", verification_uri: "https://google.com/device", expires_in: 900, interval: 1 });
+				return jsonResponse({
+					device_code: "d1",
+					user_code: "X",
+					verification_uri: "https://google.com/device",
+					expires_in: 900,
+					interval: 1,
+				});
 			}
 			return jsonResponse({ access_token: "at", expires_in: 3600, token_type: "Bearer" });
 		};

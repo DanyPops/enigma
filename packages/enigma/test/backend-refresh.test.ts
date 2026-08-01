@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import type { OidcFetch } from "../src/login-command.ts";
 import { resolveRefreshFn } from "../src/backend-refresh.ts";
+import type { OidcFetch } from "../src/login-command.ts";
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -9,7 +9,9 @@ function jsonResponse(body: unknown, status = 200): Response {
 describe("resolveRefreshFn", () => {
 	it("returns undefined for a credential with neither GitLab-shaped nor generic-OIDC-shaped extra fields (GitHub, Jenkins)", () => {
 		expect(resolveRefreshFn({ accessToken: "gh-token" })).toBeUndefined();
-		expect(resolveRefreshFn({ accessToken: "jenkins-token", extra: { url: "https://jenkins.example.com", username: "bot" } })).toBeUndefined();
+		expect(
+			resolveRefreshFn({ accessToken: "jenkins-token", extra: { url: "https://jenkins.example.com", username: "bot" } }),
+		).toBeUndefined();
 	});
 
 	it("returns undefined for a loginApiKey-shaped credential -- a static dashboard-issued key has nothing to refresh", () => {
@@ -72,7 +74,11 @@ describe("resolveRefreshFn", () => {
 	});
 
 	it("resolves a Jira-shaped refresh function (cloudId + clientId + clientSecret) that authenticates with client_secret, distinct from GitLab/generic-OIDC's public-client shape", async () => {
-		const credential = { accessToken: "stale", refreshToken: "jira-r1", extra: { cloudId: "cloud-1", siteUrl: "https://my-site.atlassian.net", clientId: "jc", clientSecret: "js" } };
+		const credential = {
+			accessToken: "stale",
+			refreshToken: "jira-r1",
+			extra: { cloudId: "cloud-1", siteUrl: "https://my-site.atlassian.net", clientId: "jc", clientSecret: "js" },
+		};
 		const fetchImpl: OidcFetch = async (input) => {
 			const url = String(input);
 			if (url === "https://auth.atlassian.com/oauth/token") {
@@ -101,14 +107,22 @@ describe("resolveRefreshFn", () => {
 	});
 
 	it("resolves a confidential-client OIDC refresh (Google-shaped: issuerUrl + clientId + clientSecret) rather than misrouting it through the plain public-client generic-OIDC path", async () => {
-		const credential = { accessToken: "stale", refreshToken: "1//refresh-x", extra: { issuerUrl: "https://accounts.google.com", clientId: "g-client", clientSecret: "g-secret" } };
+		const credential = {
+			accessToken: "stale",
+			refreshToken: "1//refresh-x",
+			extra: { issuerUrl: "https://accounts.google.com", clientId: "g-client", clientSecret: "g-secret" },
+		};
 		let discoveryCalled = false;
 		let tokenAuthBody: URLSearchParams | undefined;
 		const fetchImpl: OidcFetch = async (input, init) => {
 			const url = String(input);
 			if (url === "https://accounts.google.com/.well-known/openid-configuration") {
 				discoveryCalled = true;
-				return jsonResponse({ issuer: "https://accounts.google.com", token_endpoint: "https://oauth2.googleapis.com/token", token_endpoint_auth_methods_supported: ["client_secret_post"] });
+				return jsonResponse({
+					issuer: "https://accounts.google.com",
+					token_endpoint: "https://oauth2.googleapis.com/token",
+					token_endpoint_auth_methods_supported: ["client_secret_post"],
+				});
 			}
 			if (url === "https://oauth2.googleapis.com/token") {
 				tokenAuthBody = new URLSearchParams(init?.body as string);

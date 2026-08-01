@@ -23,7 +23,13 @@ export interface EnigmaAdminClient {
 	health(): Promise<{ ok: boolean; version: string }>;
 }
 
-function rawRequest(fetchImpl: typeof fetch, baseUrl: string, authToken: string | undefined, method: string, path: string): Promise<Response> {
+function rawRequest(
+	fetchImpl: typeof fetch,
+	baseUrl: string,
+	authToken: string | undefined,
+	method: string,
+	path: string,
+): Promise<Response> {
 	return fetchImpl(`${baseUrl}${path}`, {
 		method,
 		headers: { ...(authToken !== undefined ? { authorization: `Bearer ${authToken}` } : {}), accept: "application/json" },
@@ -104,7 +110,10 @@ function clientFromCall(call: <T>(method: string, path: string) => Promise<T | u
  * an explicit parameter (not hardcoded inline) so this exact wiring is testable
  * end to end without needing root to write into the real /run/enigma.
  */
-export function connectEnigmaClient(paths = resolveEnigmaPaths(), fallbackHandlePath: string = ENIGMA_SYSTEM_RUNTIME_HANDLE): EnigmaAdminClient {
+export function connectEnigmaClient(
+	paths = resolveEnigmaPaths(),
+	fallbackHandlePath: string = ENIGMA_SYSTEM_RUNTIME_HANDLE,
+): EnigmaAdminClient {
 	const unixSocketPath = resolveAdminSocketPath(paths.handle, fallbackHandlePath);
 
 	if (!unixSocketPath) {
@@ -112,7 +121,9 @@ export function connectEnigmaClient(paths = resolveEnigmaPaths(), fallbackHandle
 		// before this transport existed: resolves (or throws "not running"/"no admin token")
 		// synchronously, with zero network I/O, right here at connect time.
 		const endpoint = connectTcpEndpoint(paths, fallbackHandlePath);
-		return clientFromCall((method, path) => rawRequest(endpoint.fetchImpl, endpoint.baseUrl, endpoint.token, method, path).then((r) => toResult(r, method, path)));
+		return clientFromCall((method, path) =>
+			rawRequest(endpoint.fetchImpl, endpoint.baseUrl, endpoint.token, method, path).then((r) => toResult(r, method, path)),
+		);
 	}
 
 	// A socket exists, but that only means this Enigma is new enough to serve one, not that

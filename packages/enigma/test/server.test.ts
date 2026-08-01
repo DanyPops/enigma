@@ -4,12 +4,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "@danypops/vehicle-server/logging";
-import type { OidcFetch } from "../src/login-command.ts";
 import type { EnigmaAdminClient, VaultCredential } from "../src/client.ts";
 import { createClientRegistry } from "../src/client-registry.ts";
 import { createCredentialVault } from "../src/credential-vault.ts";
-import { createApp, createUnixSocketHandler } from "../src/server.ts";
+import type { OidcFetch } from "../src/login-command.ts";
 import { createEnigmaSecretsBackend } from "../src/secrets-backend-adapter.ts";
+import { createApp, createUnixSocketHandler } from "../src/server.ts";
 
 /** A minimal EnigmaAdminClient whose getCredentials hits the real app.fetch -- lets a test drive createEnigmaSecretsBackend().reveal() against the genuine HTTP route and its real audit logging, not a fake in-memory client. */
 function clientOverHttp(app: { fetch: (request: Request) => Promise<Response> }): EnigmaAdminClient {
@@ -92,7 +92,7 @@ describe("enigma vault server", () => {
 			const app = createApp(buildDeps(dir));
 			const health = await app.fetch(authed("/health"));
 			expect(health.status).toBe(200);
-			expect((await health.json() as { ok: boolean }).ok).toBe(true);
+			expect(((await health.json()) as { ok: boolean }).ok).toBe(true);
 
 			const ready = await app.fetch(authed("/ready"));
 			expect(ready.status).toBe(200);
@@ -153,7 +153,9 @@ describe("enigma vault server", () => {
 		try {
 			const deps = buildDeps(dir);
 			const app = createApp(deps);
-			const response = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave", "tavily"] }) }));
+			const response = await app.fetch(
+				authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave", "tavily"] }) }),
+			);
 			expect(response.status).toBe(201);
 			const { token } = (await response.json()) as { token: string };
 			expect(typeof token).toBe("string");
@@ -173,7 +175,9 @@ describe("enigma vault server", () => {
 		try {
 			const deps = buildDeps(dir);
 			const app = createApp(deps);
-			const response = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"], uid: 4217278 }) }));
+			const response = await app.fetch(
+				authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"], uid: 4217278 }) }),
+			);
 			expect(response.status).toBe(201);
 			expect(deps.clients.authenticateByUid(4217278)?.name).toBe("web-spider");
 		} finally {
@@ -187,9 +191,11 @@ describe("enigma vault server", () => {
 			const deps = buildDeps(dir);
 			const app = createApp(deps);
 			deps.clients.add("web-spider", ["brave"]);
-			const response = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["tavily"] }) }));
+			const response = await app.fetch(
+				authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["tavily"] }) }),
+			);
 			expect(response.status).toBe(409);
-			expect((await response.json() as { error: string }).error).toContain('"web-spider" is already registered');
+			expect(((await response.json()) as { error: string }).error).toContain('"web-spider" is already registered');
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -201,9 +207,11 @@ describe("enigma vault server", () => {
 			const deps = buildDeps(dir);
 			const app = createApp(deps);
 			deps.clients.add("pipes", ["github"], { uid: 1001 });
-			const response = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"], uid: 1001 }) }));
+			const response = await app.fetch(
+				authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"], uid: 1001 }) }),
+			);
 			expect(response.status).toBe(409);
-			expect((await response.json() as { error: string }).error).toContain("already bound");
+			expect(((await response.json()) as { error: string }).error).toContain("already bound");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -218,7 +226,9 @@ describe("enigma vault server", () => {
 			expect(noName.status).toBe(400);
 			const noBackends = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider" }) }));
 			expect(noBackends.status).toBe(400);
-			const emptyBackends = await app.fetch(authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: [] }) }));
+			const emptyBackends = await app.fetch(
+				authed("/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: [] }) }),
+			);
 			expect(emptyBackends.status).toBe(400);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -243,9 +253,13 @@ describe("enigma vault server", () => {
 			const deps = buildDeps(dir);
 			const app = createApp(deps);
 			const clientToken = deps.clients.add("pipes", ["github"]);
-			const asClient = await app.fetch(withToken("/clients", clientToken, { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }));
+			const asClient = await app.fetch(
+				withToken("/clients", clientToken, { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }),
+			);
 			expect(asClient.status).toBe(401);
-			const unauthenticated = await app.fetch(new Request("http://enigma.local/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }));
+			const unauthenticated = await app.fetch(
+				new Request("http://enigma.local/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }),
+			);
 			expect(unauthenticated.status).toBe(401);
 			// neither attempt actually registered anything
 			expect(deps.clients.list()).toEqual([{ name: "pipes", backends: ["github"], createdAt: expect.any(String) }]);
@@ -327,8 +341,16 @@ describe("enigma vault server", () => {
 		try {
 			const deps = buildDeps(dir);
 			let called = false;
-			const app = createApp({ ...deps, polkitCheck: async () => { called = true; return true; } });
-			const response = await app.fetch(new Request("http://enigma.local/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }));
+			const app = createApp({
+				...deps,
+				polkitCheck: async () => {
+					called = true;
+					return true;
+				},
+			});
+			const response = await app.fetch(
+				new Request("http://enigma.local/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }),
+			);
 			expect(response.status).toBe(401);
 			expect(called).toBe(false);
 		} finally {
@@ -395,7 +417,16 @@ describe("enigma vault server", () => {
 		try {
 			const deps = buildDeps(dir);
 			let called = false;
-			const handler = createUnixSocketHandler({ ...deps, polkitCheck: async () => { called = true; return false; } }, { adminUid: 1001 });
+			const handler = createUnixSocketHandler(
+				{
+					...deps,
+					polkitCheck: async () => {
+						called = true;
+						return false;
+					},
+				},
+				{ adminUid: 1001 },
+			);
 			const response = await handler(
 				new Request("http://enigma.local/clients", { method: "POST", body: JSON.stringify({ name: "web-spider", backends: ["brave"] }) }),
 				{ pid: 4242, uid: 1001, gid: 1001 },
@@ -445,7 +476,11 @@ describe("enigma vault server", () => {
 		try {
 			const deps = buildDeps(dir);
 			const app = createApp(deps);
-			deps.vault.save("gitlab", { accessToken: "stale-gitlab-token", refreshToken: "r1", extra: { baseUrl: "https://gitlab.example.com", clientId: "c" } });
+			deps.vault.save("gitlab", {
+				accessToken: "stale-gitlab-token",
+				refreshToken: "r1",
+				extra: { baseUrl: "https://gitlab.example.com", clientId: "c" },
+			});
 
 			const response = await app.fetch(authed("/rotate/gitlab", { method: "POST" }));
 			expect(response.status).toBe(204);
@@ -849,7 +884,9 @@ describe("credential audit logging: every read/rotate/revoke is logged, never th
 
 			await app.fetch(new Request("http://enigma.local/creds/widgetapi"));
 
-			expect(entries).toEqual([{ msg: "credential_access", fields: { backend: "widgetapi", outcome: "unauthenticated", identity: "none" } }]);
+			expect(entries).toEqual([
+				{ msg: "credential_access", fields: { backend: "widgetapi", outcome: "unauthenticated", identity: "none" } },
+			]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -865,7 +902,9 @@ describe("credential audit logging: every read/rotate/revoke is logged, never th
 
 			await app.fetch(withToken("/creds/other-backend", clientToken));
 
-			expect(entries).toEqual([{ msg: "credential_access", fields: { backend: "other-backend", outcome: "denied", identity: "client", client: "acme-consumer" } }]);
+			expect(entries).toEqual([
+				{ msg: "credential_access", fields: { backend: "other-backend", outcome: "denied", identity: "client", client: "acme-consumer" } },
+			]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -892,7 +931,11 @@ describe("credential audit logging: every read/rotate/revoke is logged, never th
 		try {
 			const { logger, entries } = fakeLogger();
 			const deps = { ...buildDeps(dir), logger };
-			deps.vault.save("gitlab", { accessToken: "old-token", refreshToken: "refresh-me", extra: { baseUrl: "https://gitlab.example.com", clientId: "c" } });
+			deps.vault.save("gitlab", {
+				accessToken: "old-token",
+				refreshToken: "refresh-me",
+				extra: { baseUrl: "https://gitlab.example.com", clientId: "c" },
+			});
 			const app = createApp(deps);
 
 			const response = await app.fetch(authed("/rotate/gitlab", { method: "POST" }));
@@ -916,7 +959,9 @@ describe("credential audit logging: every read/rotate/revoke is logged, never th
 
 			await handler(new Request("http://enigma.local/creds/widgetapi"), { pid: 1, uid: 1001, gid: 1001 });
 
-			expect(entries).toEqual([{ msg: "credential_access", fields: { backend: "widgetapi", outcome: "ok", identity: "admin", uid: 1001 } }]);
+			expect(entries).toEqual([
+				{ msg: "credential_access", fields: { backend: "widgetapi", outcome: "ok", identity: "admin", uid: 1001 } },
+			]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

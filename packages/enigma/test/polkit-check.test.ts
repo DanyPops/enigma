@@ -97,7 +97,10 @@ describe("createPkcheckAuthorizer", () => {
 describe("createPkcheckAuthorizer: real pkcheck binary integration", () => {
 	it("resolves false for a bogus, definitely-unregistered action id against the real installed pkcheck -- no custom .policy install needed to prove the real subprocess plumbing (argv shape, exit-code parsing) works end to end", async () => {
 		const authorize = createPkcheckAuthorizer();
-		const result = await authorize({ pid: process.pid, uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 }, "com.danypops.enigma.definitely-not-a-real-registered-action");
+		const result = await authorize(
+			{ pid: process.pid, uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 },
+			"com.danypops.enigma.definitely-not-a-real-registered-action",
+		);
 		expect(result).toBe(false);
 	});
 });

@@ -44,7 +44,10 @@ function withCustomFetch(config: oidc.Configuration, fetchImpl?: OidcFetch): oid
  * "keep the current one" case the way GitLab's non-rotating refresh is.
  */
 function tokenFromRotatingRefreshResponse(response: oidc.TokenEndpointResponse, current: RefreshableAccessToken): RefreshableAccessToken {
-	if (!response.refresh_token) throw new Error("Jira refresh response carried no rotated refresh token — Atlassian's refresh tokens are single-use; this should not happen on a successful refresh");
+	if (!response.refresh_token)
+		throw new Error(
+			"Jira refresh response carried no rotated refresh token — Atlassian's refresh tokens are single-use; this should not happen on a successful refresh",
+		);
 	return {
 		accessToken: response.access_token,
 		refreshToken: response.refresh_token,
@@ -57,9 +60,15 @@ function tokenFromRotatingRefreshResponse(response: oidc.TokenEndpointResponse, 
 /** Jira Cloud's refresh grant is client_secret-authenticated, matching login — both clientId and clientSecret must have been stashed in extra at login time. */
 function createJiraRefresh(clientId: string, clientSecret: string, fetchImpl?: OidcFetch): RefreshFn {
 	return async (current: RefreshableAccessToken): Promise<RefreshableAccessToken> => {
-		if (!current.refreshToken) throw new Error("Jira credential has no refresh token — cannot refresh; re-run login with the offline_access scope");
+		if (!current.refreshToken)
+			throw new Error("Jira credential has no refresh token — cannot refresh; re-run login with the offline_access scope");
 		const config = withCustomFetch(
-			new oidc.Configuration({ issuer: "https://auth.atlassian.com", token_endpoint: "https://auth.atlassian.com/oauth/token" }, clientId, undefined, oidc.ClientSecretPost(clientSecret)),
+			new oidc.Configuration(
+				{ issuer: "https://auth.atlassian.com", token_endpoint: "https://auth.atlassian.com/oauth/token" },
+				clientId,
+				undefined,
+				oidc.ClientSecretPost(clientSecret),
+			),
 			fetchImpl,
 		);
 		const response = await oidc.refreshTokenGrant(config, current.refreshToken);

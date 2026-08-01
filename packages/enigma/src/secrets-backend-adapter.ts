@@ -20,7 +20,13 @@ const SOURCE = "enigma";
 
 function toRecord(name: string, credential: VaultCredential | undefined): SecretRecord {
 	if (!credential) return { name, source: SOURCE, configured: false };
-	return { name, source: SOURCE, configured: true, ...(credential.expiresAt ? { expiresAt: credential.expiresAt } : {}), ...(credential.scope ? { scope: credential.scope } : {}) };
+	return {
+		name,
+		source: SOURCE,
+		configured: true,
+		...(credential.expiresAt ? { expiresAt: credential.expiresAt } : {}),
+		...(credential.scope ? { scope: credential.scope } : {}),
+	};
 }
 
 export function createEnigmaSecretsBackend(client: EnigmaAdminClient): SecretsBackend {

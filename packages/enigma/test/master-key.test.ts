@@ -1,19 +1,19 @@
 import { describe, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { createCredentialVault } from "../src/credential-vault.ts";
 import {
-	MasterKeyFailure,
 	createFileMasterKeyProvider,
 	createSecretServiceMasterKeyProvider,
 	createSystemdCredentialMasterKeyProvider,
+	MasterKeyFailure,
+	type MasterKeyProvider,
 	readMasterKeyManifest,
 	resolveMasterKey,
 	selectUniqueLegacyKey,
-	type MasterKeyProvider,
 } from "../src/master-key.ts";
 
 function tmpDir(): string {
@@ -344,19 +344,16 @@ describe("Secret Service master-key provider", () => {
 		const calls: Array<{ args: string[]; input?: Buffer }> = [];
 		const key = randomBytes(32);
 		let stored = false;
-		const provider = createSecretServiceMasterKeyProvider(
-			{ service: "test.service", account: "master" },
-			(command, args, options) => {
-				calls.push({ args: [command, ...args], input: options.input });
-				if (args[0] === "store") {
-					stored = true;
-					return { status: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
-				}
-				return stored
-					? { status: 0, stdout: Buffer.from(`${key.toString("base64")}\n`), stderr: Buffer.alloc(0) }
-					: { status: 1, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
-			},
-		);
+		const provider = createSecretServiceMasterKeyProvider({ service: "test.service", account: "master" }, (command, args, options) => {
+			calls.push({ args: [command, ...args], input: options.input });
+			if (args[0] === "store") {
+				stored = true;
+				return { status: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+			}
+			return stored
+				? { status: 0, stdout: Buffer.from(`${key.toString("base64")}\n`), stderr: Buffer.alloc(0) }
+				: { status: 1, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+		});
 		provider.write(key);
 		const storeCall = calls.find((call) => call.args.includes("store"));
 		expect(storeCall?.args.join(" ")).not.toContain(key.toString("base64"));
@@ -364,10 +361,11 @@ describe("Secret Service master-key provider", () => {
 	});
 
 	it("classifies a locked collection without exposing provider stderr", () => {
-		const provider = createSecretServiceMasterKeyProvider(
-			{ service: "test.service", account: "master" },
-			() => ({ status: 1, stdout: Buffer.alloc(0), stderr: Buffer.from("org.freedesktop.Secret.Error.IsLocked private-detail") }),
-		);
+		const provider = createSecretServiceMasterKeyProvider({ service: "test.service", account: "master" }, () => ({
+			status: 1,
+			stdout: Buffer.alloc(0),
+			stderr: Buffer.from("org.freedesktop.Secret.Error.IsLocked private-detail"),
+		}));
 		try {
 			provider.read();
 			expect.unreachable();
@@ -380,7 +378,9 @@ describe("Secret Service master-key provider", () => {
 
 	it("persists one key across two real Secret Service client processes when available", () => {
 		const identity = { service: `danypops.enigma.test.${randomUUID()}`, account: "master" };
-		const probe = spawnSync("/usr/bin/secret-tool", ["lookup", "service", identity.service, "username", identity.account], { maxBuffer: 4096 });
+		const probe = spawnSync("/usr/bin/secret-tool", ["lookup", "service", identity.service, "username", identity.account], {
+			maxBuffer: 4096,
+		});
 		if (probe.error || probe.status !== 1 || probe.stderr.length !== 0) return;
 		const first = createSecretServiceMasterKeyProvider(identity);
 		const second = createSecretServiceMasterKeyProvider(identity);

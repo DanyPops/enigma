@@ -129,7 +129,9 @@ export function createClientRegistry(path: string): ClientRegistry {
 			save(path, { version: 1, clients: next });
 		},
 		list() {
-			return load(path).clients.map(({ name, backends, createdAt, uid }) => (uid !== undefined ? { name, backends, createdAt, uid } : { name, backends, createdAt }));
+			return load(path).clients.map(({ name, backends, createdAt, uid }) =>
+				uid !== undefined ? { name, backends, createdAt, uid } : { name, backends, createdAt },
+			);
 		},
 		authenticate(token) {
 			const hash = hashToken(token);

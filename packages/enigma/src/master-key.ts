@@ -1,20 +1,10 @@
-import { Entry, findCredentials } from "@napi-rs/keyring";
-import { randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import {
-	chmodSync,
-	existsSync,
-	linkSync,
-	lstatSync,
-	mkdirSync,
-	readFileSync,
-	readdirSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
-import { createCredentialVault } from "./credential-vault.ts";
+import { Entry, findCredentials } from "@napi-rs/keyring";
 import { KEYRING_ACCOUNT, KEYRING_SERVICE } from "./constants.ts";
+import { createCredentialVault } from "./credential-vault.ts";
 
 const MASTER_KEY_BYTES = 32;
 const MAX_KEY_FILE_BYTES = 128;
@@ -26,12 +16,7 @@ const SECRET_TOOL_MAX_OUTPUT_BYTES = 4096;
 const SECRET_TOOL_TIMEOUT_MS = 10_000;
 const MACOS_SECURITY_PATH = "/usr/bin/security";
 
-export type MasterKeyProviderKind =
-	| "secret-service"
-	| "systemd-credential"
-	| "macos-keychain"
-	| "windows-credential-manager"
-	| "file";
+export type MasterKeyProviderKind = "secret-service" | "systemd-credential" | "macos-keychain" | "windows-credential-manager" | "file";
 export type MasterKeyFailureCode =
 	| "not_found"
 	| "locked"
@@ -70,8 +55,6 @@ export interface NativeKeyringBindings {
 	createEntry(service: string, account: string): { setPassword(password: string): void };
 }
 
-
-
 export interface MasterKeyManifest {
 	version: 1;
 	provider: MasterKeyProviderKind;
@@ -84,11 +67,7 @@ export interface SecretToolResult {
 	error?: Error;
 }
 
-export type SecretToolRunner = (
-	command: string,
-	args: string[],
-	options: { input?: Buffer },
-) => SecretToolResult;
+export type SecretToolRunner = (command: string, args: string[], options: { input?: Buffer }) => SecretToolResult;
 
 export interface ResolveMasterKeyOptions {
 	manifestPath: string;
@@ -262,7 +241,8 @@ function macosSecurityFailure(result: SecretToolResult): MasterKeyFailure {
 	// positive proof of "locked" specifically, only proof that the query couldn't complete in budget.
 	if (result.status === null) return new MasterKeyFailure("unavailable", "macos-keychain");
 	const stderr = result.stderr.toString("utf8");
-	if (result.status === 44 || /could not be found in the keychain/i.test(stderr)) return new MasterKeyFailure("not_found", "macos-keychain");
+	if (result.status === 44 || /could not be found in the keychain/i.test(stderr))
+		return new MasterKeyFailure("not_found", "macos-keychain");
 	if (/interaction.*not allowed/i.test(stderr)) return new MasterKeyFailure("locked", "macos-keychain");
 	if (/denied|not permitted|authorization/i.test(stderr)) return new MasterKeyFailure("denied", "macos-keychain");
 	return new MasterKeyFailure("unavailable", "macos-keychain");
@@ -398,7 +378,16 @@ export function createSecretServiceMasterKeyProvider(
 
 			const result = runner(
 				SECRET_TOOL_PATH,
-				["store", "--label=Enigma master key", "service", identity.service, "username", identity.account, "enigma-purpose", "master-key-v1"],
+				[
+					"store",
+					"--label=Enigma master key",
+					"service",
+					identity.service,
+					"username",
+					identity.account,
+					"enigma-purpose",
+					"master-key-v1",
+				],
 				{ input: Buffer.from(`${key.toString("base64")}\n`) },
 			);
 			if (result.error || result.status !== 0) throw secretToolFailure(result, "write");
@@ -448,10 +437,7 @@ function defaultProviderKind(platform: NodeJS.Platform): MasterKeyProviderKind {
 	throw new MasterKeyFailure("unsupported", "resolver");
 }
 
-function providerFor(
-	providers: Partial<Record<MasterKeyProviderKind, MasterKeyProvider>>,
-	kind: MasterKeyProviderKind,
-): MasterKeyProvider {
+function providerFor(providers: Partial<Record<MasterKeyProviderKind, MasterKeyProvider>>, kind: MasterKeyProviderKind): MasterKeyProvider {
 	const provider = providers[kind];
 	if (!provider || provider.kind !== kind) throw new MasterKeyFailure("unsupported", kind);
 	return provider;
@@ -617,10 +603,7 @@ export interface MasterKeyPaths {
 	masterKeyProviderFile: string;
 }
 
-export function resolveConfiguredMasterKey(
-	paths: MasterKeyPaths,
-	env: Record<string, string | undefined> = process.env,
-): Buffer {
+export function resolveConfiguredMasterKey(paths: MasterKeyPaths, env: Record<string, string | undefined> = process.env): Buffer {
 	return resolveMasterKey({
 		credentialsDir: paths.credentialsDir,
 		filePath: paths.masterKeyFile,

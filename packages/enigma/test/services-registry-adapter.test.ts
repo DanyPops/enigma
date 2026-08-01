@@ -15,7 +15,12 @@ function fakeClient(clients: VaultClientRecord[]): EnigmaAdminClient {
 
 describe("createEnigmaServicesRegistry", () => {
 	it("passes Enigma's own client-registry records straight through -- already the same shape as ServiceRecord", async () => {
-		const registry = createEnigmaServicesRegistry(fakeClient([{ name: "pipes", backends: ["github", "jenkins-ci"] }, { name: "tickets", backends: ["github", "jira"], uid: 1001 }]));
+		const registry = createEnigmaServicesRegistry(
+			fakeClient([
+				{ name: "pipes", backends: ["github", "jenkins-ci"] },
+				{ name: "tickets", backends: ["github", "jira"], uid: 1001 },
+			]),
+		);
 		expect(await registry.list()).toEqual([
 			{ name: "pipes", backends: ["github", "jenkins-ci"] },
 			{ name: "tickets", backends: ["github", "jira"], uid: 1001 },

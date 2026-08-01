@@ -6,8 +6,8 @@
  * argv this test file's own process happens to have.
  */
 import { describe, expect, it } from "bun:test";
-import type { EnigmaAdminClient } from "../src/client.ts";
 import { showMain } from "../src/cli.ts";
+import type { EnigmaAdminClient } from "../src/client.ts";
 
 function fakeClient(overrides: Partial<EnigmaAdminClient> = {}): EnigmaAdminClient {
 	return {
@@ -40,7 +40,9 @@ function captureConsole(): { logs: string[]; errors: string[]; restore: () => vo
 
 describe("showMain", () => {
 	it("prints the real, decrypted credential as JSON to stdout, with a warning on stderr first", async () => {
-		const client = fakeClient({ getCredentials: async (backend) => (backend === "github" ? { accessToken: "ghp_real_value" } : undefined) });
+		const client = fakeClient({
+			getCredentials: async (backend) => (backend === "github" ? { accessToken: "ghp_real_value" } : undefined),
+		});
 		const { logs, errors, restore } = captureConsole();
 		try {
 			await showMain("github", () => client);
@@ -57,7 +59,6 @@ describe("showMain", () => {
 		const { logs, errors, restore } = captureConsole();
 		const originalExit = process.exit;
 		let exitCode: number | undefined;
-		// biome-ignore lint: test-only override of process.exit to observe the code without actually terminating the test runner
 		process.exit = ((code?: number) => {
 			exitCode = code;
 			throw new Error("exit");

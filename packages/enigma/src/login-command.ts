@@ -57,10 +57,7 @@ export interface DeviceCodePrompt {
 /** Narrower than `typeof fetch` so a plain test double doesn't need to satisfy Bun's full fetch shape (e.g. preconnect) — matches the FetchLike convention used throughout this codebase. */
 export type OidcFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-function tokenFromResponse(
-	response: oidc.TokenEndpointResponse,
-	extra?: Record<string, string>,
-): RefreshableAccessToken {
+function tokenFromResponse(response: oidc.TokenEndpointResponse, extra?: Record<string, string>): RefreshableAccessToken {
 	return {
 		accessToken: response.access_token,
 		refreshToken: response.refresh_token,
@@ -154,8 +151,16 @@ export async function loginGitLab(options: GitLabLoginOptions): Promise<Refresha
 	try {
 		return await runDeviceFlow(config, options.scope, options.onPrompt, { baseUrl: options.baseUrl, clientId: options.clientId });
 	} catch (error) {
-		if (error instanceof oidc.ResponseBodyError && error.cause && typeof error.cause === "object" && "error" in error.cause && (error.cause as { error: unknown }).error === "Not Found") {
-			throw new Error(`GitLab device authorization request failed: this instance may not support the device grant — PKCE fallback is not yet implemented in enigma`);
+		if (
+			error instanceof oidc.ResponseBodyError &&
+			error.cause &&
+			typeof error.cause === "object" &&
+			"error" in error.cause &&
+			(error.cause as { error: unknown }).error === "Not Found"
+		) {
+			throw new Error(
+				`GitLab device authorization request failed: this instance may not support the device grant — PKCE fallback is not yet implemented in enigma`,
+			);
 		}
 		throw error;
 	}
@@ -185,7 +190,9 @@ export async function loginOidc(options: OidcLoginOptions): Promise<RefreshableA
 		options.fetchImpl ? { [oidc.customFetch]: options.fetchImpl } : undefined,
 	);
 	if (!config.serverMetadata().device_authorization_endpoint) {
-		throw new Error(`${options.issuerUrl} does not advertise a device_authorization_endpoint — this provider may not support the device grant`);
+		throw new Error(
+			`${options.issuerUrl} does not advertise a device_authorization_endpoint — this provider may not support the device grant`,
+		);
 	}
 	return runDeviceFlow(config, options.scope, options.onPrompt, { issuerUrl: options.issuerUrl, clientId: options.clientId });
 }
@@ -283,14 +290,18 @@ export function startJiraCallbackListener(port: number): JiraCallbackListener {
 			const error = url.searchParams.get("error");
 			if (error) {
 				resolveCallback({ error });
-				return new Response(`<html><body>Authorization failed: ${error}. You can close this tab.</body></html>`, { headers: { "content-type": "text/html" } });
+				return new Response(`<html><body>Authorization failed: ${error}. You can close this tab.</body></html>`, {
+					headers: { "content-type": "text/html" },
+				});
 			}
 			if (!code || !state) {
 				resolveCallback({ error: "missing code or state" });
 				return new Response("<html><body>Missing code or state.</body></html>", { status: 400, headers: { "content-type": "text/html" } });
 			}
 			resolveCallback({ code, state });
-			return new Response("<html><body>Authorization complete. You can close this tab.</body></html>", { headers: { "content-type": "text/html" } });
+			return new Response("<html><body>Authorization complete. You can close this tab.</body></html>", {
+				headers: { "content-type": "text/html" },
+			});
 		},
 	});
 
@@ -318,20 +329,28 @@ export interface JiraCloudLoginOptions {
 
 function jiraConfiguration(options: Pick<JiraCloudLoginOptions, "clientId" | "clientSecret" | "fetchImpl">): oidc.Configuration {
 	return withCustomFetch(
-		new oidc.Configuration({ issuer: "https://auth.atlassian.com", authorization_endpoint: JIRA_AUTHORIZATION_ENDPOINT, token_endpoint: JIRA_TOKEN_ENDPOINT }, options.clientId, undefined, oidc.ClientSecretPost(options.clientSecret)),
+		new oidc.Configuration(
+			{ issuer: "https://auth.atlassian.com", authorization_endpoint: JIRA_AUTHORIZATION_ENDPOINT, token_endpoint: JIRA_TOKEN_ENDPOINT },
+			options.clientId,
+			undefined,
+			oidc.ClientSecretPost(options.clientSecret),
+		),
 		options.fetchImpl,
 	);
 }
 
 async function fetchAccessibleResources(accessToken: string, fetchImpl?: OidcFetch): Promise<AccessibleResource[]> {
 	const fetchFn = fetchImpl ?? fetch;
-	const response = await fetchFn(JIRA_ACCESSIBLE_RESOURCES_URL, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+	const response = await fetchFn(JIRA_ACCESSIBLE_RESOURCES_URL, {
+		headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+	});
 	if (!response.ok) throw new Error(`Jira accessible-resources lookup failed: ${response.status} ${await response.text()}`);
 	return (await response.json()) as AccessibleResource[];
 }
 
 function selectAccessibleResource(resources: AccessibleResource[], site?: string): AccessibleResource {
-	if (resources.length === 0) throw new Error("Jira login succeeded but accessible-resources returned no sites — check the app's granted scopes");
+	if (resources.length === 0)
+		throw new Error("Jira login succeeded but accessible-resources returned no sites — check the app's granted scopes");
 	if (resources.length === 1) return resources[0]!;
 	const match = site ? resources.find((r) => r.url.includes(site) || r.name.includes(site)) : undefined;
 	if (match) return match;
@@ -375,7 +394,12 @@ export async function loginJiraCloud(options: JiraCloudLoginOptions): Promise<Re
 		const resources = await fetchAccessibleResources(tokens.access_token, options.fetchImpl);
 		const resource = selectAccessibleResource(resources, options.site);
 
-		return tokenFromResponse(tokens, { clientId: options.clientId, clientSecret: options.clientSecret, cloudId: resource.id, siteUrl: resource.url });
+		return tokenFromResponse(tokens, {
+			clientId: options.clientId,
+			clientSecret: options.clientSecret,
+			cloudId: resource.id,
+			siteUrl: resource.url,
+		});
 	} finally {
 		listener.close();
 	}

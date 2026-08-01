@@ -14,7 +14,9 @@ describe("promptMaskedSecret", () => {
 		const input = ttyInput();
 		const output = new PassThrough();
 		let written = "";
-		output.on("data", (chunk) => { written += chunk.toString(); });
+		output.on("data", (chunk) => {
+			written += chunk.toString();
+		});
 
 		const promise = promptMaskedSecret("Paste the key: ", input, output);
 		input.write("my-secret-key");

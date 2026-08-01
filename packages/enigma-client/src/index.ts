@@ -18,8 +18,8 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { readDaemonHandle, resolveDaemonPaths, type DaemonHandle } from "@danypops/vehicle-server/paths";
 import { connectUnixRpc } from "@danypops/vehicle-client/unix-rpc-client";
+import { type DaemonHandle, readDaemonHandle, resolveDaemonPaths } from "@danypops/vehicle-server/paths";
 import type { RefreshableAccessToken } from "@danypops/vehicle-server/vault";
 
 const ENIGMA_STATE_DIRECTORY_NAME = "enigma";
@@ -125,7 +125,13 @@ export function resolveAdminSocketPath(primaryHandlePath: string, fallbackHandle
 function connect(opts: TryEnigmaCredentialOptions): ConnectedVault | undefined {
 	const env = opts.env ?? process.env;
 	const paths = resolveDaemonPaths(
-		{ stateDirectoryName: ENIGMA_STATE_DIRECTORY_NAME, handleFilename: ENIGMA_HANDLE_FILENAME, tokenFilename: ENIGMA_TOKEN_FILENAME, databaseFilename: "", systemdUnitName: "" },
+		{
+			stateDirectoryName: ENIGMA_STATE_DIRECTORY_NAME,
+			handleFilename: ENIGMA_HANDLE_FILENAME,
+			tokenFilename: ENIGMA_TOKEN_FILENAME,
+			databaseFilename: "",
+			systemdUnitName: "",
+		},
 		{ env },
 	);
 
@@ -178,7 +184,11 @@ async function getJson<T>(vault: ConnectedVault, path: string): Promise<T | unde
  * sent; only a transport-level failure (unreachable, timed out) is the
  * caller's job to distinguish, via the outer function returning undefined.
  */
-async function postJson<TBody, TResult>(vault: ConnectedVault, path: string, body: TBody): Promise<{ status: number; body: TResult | { error: string } | undefined }> {
+async function postJson<TBody, TResult>(
+	vault: ConnectedVault,
+	path: string,
+	body: TBody,
+): Promise<{ status: number; body: TResult | { error: string } | undefined }> {
 	const response = await vault.fetchImpl(`${vault.baseUrl}${path}`, {
 		method: "POST",
 		headers: {
@@ -204,7 +214,8 @@ export const tryEnigmaCredential: TryEnigmaCredential = async (backend, opts = {
 };
 
 /** Resolves just the access token -- what a caller needs when it already resolves baseUrl/etc. separately from env. */
-export const tryEnigmaAccessToken: TryEnigmaAccessToken = async (backend, opts = {}) => (await tryEnigmaCredential(backend, opts))?.accessToken;
+export const tryEnigmaAccessToken: TryEnigmaAccessToken = async (backend, opts = {}) =>
+	(await tryEnigmaCredential(backend, opts))?.accessToken;
 
 /** This client's own real scope, from Enigma itself -- lets a caller discover its registered backends instead of hardcoding them. */
 export const tryEnigmaWhoAmI: TryEnigmaWhoAmI = async (opts = {}) => {
@@ -244,7 +255,10 @@ export type EnigmaAdminMutationResult = { ok: true; token: string } | { ok: fals
  * undefined: unlike a read, a failed *mutation* is something the caller
  * needs to react to, not silently fall through from.
  */
-export async function addEnigmaClient(registration: EnigmaClientRegistrationRequest, opts: TryEnigmaCredentialOptions = {}): Promise<EnigmaAdminMutationResult | undefined> {
+export async function addEnigmaClient(
+	registration: EnigmaClientRegistrationRequest,
+	opts: TryEnigmaCredentialOptions = {},
+): Promise<EnigmaAdminMutationResult | undefined> {
 	const vault = connect(opts);
 	if (!vault) return undefined;
 	try {
@@ -261,11 +275,18 @@ export async function addEnigmaClient(registration: EnigmaClientRegistrationRequ
 }
 
 /** Reissues a client's token, invalidating the old one immediately. Same reachability/error-surfacing contract as addEnigmaClient. */
-export async function rotateEnigmaClient(name: string, opts: TryEnigmaCredentialOptions = {}): Promise<EnigmaAdminMutationResult | undefined> {
+export async function rotateEnigmaClient(
+	name: string,
+	opts: TryEnigmaCredentialOptions = {},
+): Promise<EnigmaAdminMutationResult | undefined> {
 	const vault = connect(opts);
 	if (!vault) return undefined;
 	try {
-		const { status, body } = await postJson<Record<string, never>, { token: string }>(vault, `/clients/${encodeURIComponent(name)}/rotate`, {});
+		const { status, body } = await postJson<Record<string, never>, { token: string }>(
+			vault,
+			`/clients/${encodeURIComponent(name)}/rotate`,
+			{},
+		);
 		if (status >= 200 && status < 300) {
 			const token = (body as { token?: string } | undefined)?.token;
 			if (!token) return { ok: false, status, error: "malformed success response from Enigma (missing token)" };
