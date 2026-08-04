@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/enigma-client",
-	"version": "0.6.0",
+	"version": "0.6.1",
 	"license": "MIT",
 	"description": "Client for talking to a running Enigma vault: discovers it, presents a token, fetches a credential. Never imports Enigma's own source.",
 	"type": "module",
@@ -16,8 +16,8 @@
 		"check": "bun x tsc --noEmit"
 	},
 	"dependencies": {
-		"@danypops/vehicle-server": "^0.1.1",
-		"@danypops/vehicle-client": "^0.1.1"
+		"@danypops/vehicle-server": "^0.17.2",
+		"@danypops/vehicle-client": "^0.5.3"
 	},
 	"devDependencies": {
 		"bun-types": "latest",
