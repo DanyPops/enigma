@@ -1,11 +1,19 @@
-import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClientAlreadyRegisteredError, ClientNotFoundError, createClientRegistry, UidAlreadyBoundError } from "../src/client-registry.ts";
 
+const tmpDirs: string[] = [];
+
+afterEach(() => {
+	for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
 function registryPath(): string {
-	return join(mkdtempSync(join(tmpdir(), "enigma-client-registry-")), "clients.json");
+	const dir = mkdtempSync(join(tmpdir(), "enigma-client-registry-"));
+	tmpDirs.push(dir);
+	return join(dir, "clients.json");
 }
 
 describe("createClientRegistry", () => {
