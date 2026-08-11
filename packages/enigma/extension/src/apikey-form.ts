@@ -7,18 +7,25 @@
  * at all (checked directly against its type -- ExtensionUIDialogOptions
  * carries only signal/timeout), which is why this needs a real custom
  * `ctx.ui.custom()` component rather than reusing the built-in dialog.
+ *
+ * Thin wrapper around Malevich's generic Form + MaskedInput -- this file
+ * used to hand-roll its own focus/navigation/validation loop identical to
+ * what Form now owns generically (see the sibling Papyrus migration task).
+ * Behavior is unchanged: same field order, same key handling, same
+ * pre-Malevich ctrl+h backspace alias, same help text (Form's own default
+ * literally matches the string this form used before).
  */
-import { type Component, Input, Key, matchesKey } from "@earendil-works/pi-tui";
-import { MaskedInput } from "malevich-tui-components";
+import { type Component, Input, Key, type KeyId, matchesKey } from "@earendil-works/pi-tui";
+import { Form, type FormTheme, type KeyMatcher, MaskedInput } from "malevich-tui-components";
 
 /**
- * Malevich's MaskedInput only ever asks its injected matcher about "backspace" --
+ * Malevich's MaskedInput/Form only ever ask this matcher about "backspace" --
  * ctrl+h was a separate, explicit alias in this form's own pre-Malevich copy, so
  * it's folded in here rather than dropped when delegating everything else to
  * pi-tui's real matchesKey.
  */
-const matchesKeyWithCtrlHBackspace = (data: string, keyId: string): boolean =>
-	keyId === "backspace" ? matchesKey(data, Key.backspace) || matchesKey(data, "ctrl+h") : matchesKey(data, keyId as Parameters<typeof matchesKey>[1]);
+const matchesKeyWithCtrlHBackspace: KeyMatcher = (data, keyId) =>
+	keyId === "backspace" ? matchesKey(data, Key.backspace) || matchesKey(data, "ctrl+h") : matchesKey(data, keyId as KeyId);
 
 export interface ApiKeyFormResult {
 	name: string;
@@ -26,14 +33,7 @@ export interface ApiKeyFormResult {
 	value: string;
 }
 
-export interface ApiKeyFormTheme {
-	label: (s: string) => string;
-	focusedLabel: (s: string) => string;
-	help: (s: string) => string;
-	error: (s: string) => string;
-}
-
-type Field = { label: string; input: Input | MaskedInput };
+export type ApiKeyFormTheme = FormTheme;
 
 /**
  * Tab/Enter move to the next field (Enter on the last field submits);
@@ -42,70 +42,38 @@ type Field = { label: string; input: Input | MaskedInput };
  * any field is still empty -- the caller never sees a half-filled result.
  */
 export class ApiKeyRegistrationForm implements Component {
-	private readonly fields: Field[];
-	private focusIndex = 0;
-	private errorMessage: string | undefined;
+	private readonly form: Form;
 
 	onSubmit?: (result: ApiKeyFormResult) => void;
 	onCancel?: () => void;
 
-	constructor(private readonly theme: ApiKeyFormTheme, defaultName = "", defaultEnvVar = "") {
+	constructor(theme: ApiKeyFormTheme, defaultName = "", defaultEnvVar = "") {
 		const nameInput = new Input();
 		nameInput.setValue(defaultName);
 		const envVarInput = new Input();
 		envVarInput.setValue(defaultEnvVar);
-		this.fields = [
-			{ label: "Backend name", input: nameInput },
-			{ label: "Env var name", input: envVarInput },
-			{ label: "API key value", input: new MaskedInput({ matchesKey: matchesKeyWithCtrlHBackspace }) },
-		];
+		this.form = new Form({
+			theme,
+			matchesKey: matchesKeyWithCtrlHBackspace,
+			fields: [
+				{ key: "name", label: "Backend name", input: nameInput },
+				{ key: "envVar", label: "Env var name", input: envVarInput },
+				{ key: "value", label: "API key value", input: new MaskedInput({ matchesKey: matchesKeyWithCtrlHBackspace }) },
+			],
+		});
+		this.form.onSubmit = (result) => this.onSubmit?.({ name: result.name ?? "", envVar: result.envVar ?? "", value: result.value ?? "" });
+		this.form.onCancel = () => this.onCancel?.();
 	}
 
 	handleInput(data: string): void {
-		if (matchesKey(data, Key.escape)) {
-			this.onCancel?.();
-			return;
-		}
-		if (matchesKey(data, Key.shift("tab"))) {
-			this.focusIndex = Math.max(0, this.focusIndex - 1);
-			return;
-		}
-		if (matchesKey(data, Key.tab) || matchesKey(data, Key.enter)) {
-			if (this.focusIndex < this.fields.length - 1) {
-				this.focusIndex++;
-			} else {
-				this.trySubmit();
-			}
-			return;
-		}
-		this.fields[this.focusIndex]?.input.handleInput(data);
-	}
-
-	private trySubmit(): void {
-		const name = (this.fields[0]?.input as Input).getValue().trim();
-		const envVar = (this.fields[1]?.input as Input).getValue().trim();
-		const value = (this.fields[2]?.input as MaskedInput).getValue();
-		if (!name || !envVar || !value) {
-			this.errorMessage = "All three fields are required.";
-			return;
-		}
-		this.errorMessage = undefined;
-		this.onSubmit?.({ name, envVar, value });
+		this.form.handleInput(data);
 	}
 
 	render(width: number): string[] {
-		const lines: string[] = [];
-		this.fields.forEach((field, i) => {
-			const marker = i === this.focusIndex ? "> " : "  ";
-			const prefix = `${marker}${field.label}: `;
-			const rendered = field.input.render(Math.max(1, width - prefix.length))[0] ?? "";
-			const styled = i === this.focusIndex ? this.theme.focusedLabel(prefix) : this.theme.label(prefix);
-			lines.push(`${styled}${rendered}`);
-		});
-		if (this.errorMessage) lines.push(this.theme.error(this.errorMessage));
-		lines.push(this.theme.help("tab/enter next field \u2022 shift+tab previous \u2022 enter on last field submits \u2022 esc cancel"));
-		return lines;
+		return this.form.render(width);
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		this.form.invalidate();
+	}
 }
