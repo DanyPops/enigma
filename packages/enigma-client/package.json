@@ -16,8 +16,8 @@
 		"check": "bun x tsc --noEmit"
 	},
 	"dependencies": {
-		"@danypops/vehicle-server": "^0.17.2",
-		"@danypops/vehicle-client": "^0.5.3"
+		"@danypops/vehicle-client": "^0.9.1",
+		"@danypops/vehicle-server": "^0.24.1"
 	},
 	"devDependencies": {
 		"bun-types": "latest",
