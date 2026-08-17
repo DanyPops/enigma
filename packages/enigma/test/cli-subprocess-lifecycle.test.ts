@@ -54,7 +54,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
 	throw new Error("waitFor timed out");
 }
 
-describe("enigma walking skeleton (real CLI subprocess)", () => {
+describe("enigma CLI subprocess lifecycle (real process)", () => {
 	it("serve boots and answers a real HTTP health check", async () => {
 		const dir = tmpDir();
 		let env: XdgEnv | undefined;
