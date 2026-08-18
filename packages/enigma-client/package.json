@@ -17,7 +17,7 @@
 	},
 	"dependencies": {
 		"@danypops/vehicle-client": "^0.10.3",
-		"@danypops/vehicle-server": "^0.25.1"
+		"@danypops/vehicle-server": "^0.25.2"
 	},
 	"devDependencies": {
 		"bun-types": "latest",

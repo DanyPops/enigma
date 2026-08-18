@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "@danypops/vehicle-server/logging";
+import { openVehicleMetricsStore } from "@danypops/vehicle-server/metrics";
 import type { EnigmaAdminClient, VaultCredential } from "../src/client.ts";
 import { createClientRegistry } from "../src/client-registry.ts";
 import { createCredentialVault } from "../src/credential-vault.ts";
@@ -73,6 +74,75 @@ function authed(path: string, init: RequestInit = {}): Request {
 		headers: { ...init.headers, authorization: `Bearer ${TOKEN}` },
 	});
 }
+
+describe("enigma tool/operation usage metrics (hand-rolled -- see request-metrics.ts, no VehicleRegistry exists here)", () => {
+	it("records every dispatched request and normalizes a route's variable segment before recording, keeping tool_name bounded", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-metrics-"));
+		try {
+			const metrics = openVehicleMetricsStore(":memory:");
+			const app = createApp({ ...buildDeps(dir), metrics });
+
+			await app.fetch(authed("/health"));
+			await app.fetch(authed("/creds/gitlab"));
+			await app.fetch(authed("/creds/github"));
+
+			const byTool = new Map(metrics.query({ groupBy: ["toolName"] }).map((row) => [row.key.toolName, row]));
+			expect(byTool.get("/health")).toMatchObject({ count: 1, successCount: 1 });
+			// Both distinct backends collapse into the same bounded route template, not two separate
+			// tool_name values -- normalizeEnigmaRoute's whole point.
+			expect(byTool.get("/creds/:backend")).toMatchObject({ count: 2, failureCount: 2 }); // 404: neither backend has a credential stored
+			expect(byTool.has("/creds/gitlab")).toBe(false);
+			expect(byTool.has("/creds/github")).toBe(false);
+
+			metrics.close();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("GET /metrics (admin-only) queries the same store, and is a harmless empty result when no store was configured", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-metrics-route-"));
+		try {
+			const noStoreApp = createApp(buildDeps(dir));
+			const emptyResponse = await noStoreApp.fetch(authed("/metrics"));
+			expect(emptyResponse.status).toBe(200);
+			expect(await emptyResponse.json()).toEqual([]);
+
+			const metrics = openVehicleMetricsStore(":memory:");
+			const app = createApp({ ...buildDeps(dir), metrics });
+			await app.fetch(authed("/health"));
+			const response = await app.fetch(authed("/metrics?toolName=/health"));
+			expect(response.status).toBe(200);
+			const rows = (await response.json()) as Array<{ count: number }>;
+			expect(rows[0]).toMatchObject({ count: 1 });
+
+			// Admin-only, like every other route below the blanket gate (metrics themselves are
+			// operational data, not something a registered client's own scoped token should see).
+			const unauthedResponse = await app.fetch(new Request("http://enigma.local/metrics"));
+			expect(unauthedResponse.status).toBe(401);
+
+			metrics.close();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("createUnixSocketHandler records too, sharing the exact same store/normalization as the TCP transport", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "enigma-server-metrics-unix-"));
+		try {
+			const metrics = openVehicleMetricsStore(":memory:");
+			const handler = createUnixSocketHandler({ ...buildDeps(dir), metrics }, { adminUid: 1000 });
+			await handler(new Request("http://enigma.local/health"), { uid: 1000, gid: 1000, pid: 1 });
+
+			const rows = metrics.query({ toolName: "/health" });
+			expect(rows[0]).toMatchObject({ count: 1, successCount: 1 });
+
+			metrics.close();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("enigma vault server", () => {
 	it("rejects every route without a valid bearer token", async () => {

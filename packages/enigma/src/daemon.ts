@@ -1,7 +1,9 @@
 /** Bun composition root: binds and serves the vault via @danypops/vehicle-server's runDaemonProcess. */
+import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { runDaemonProcess } from "@danypops/vehicle-server/daemon";
 import { createLogger } from "@danypops/vehicle-server/logging";
+import { openVehicleMetricsStore } from "@danypops/vehicle-server/metrics";
 import { ensureAuthToken } from "@danypops/vehicle-server/paths";
 import { serveUnixRpc } from "@danypops/vehicle-server/unix-rpc-server";
 import { createClientRegistry } from "./client-registry.ts";
@@ -54,7 +56,22 @@ export function serveMain(): void {
 	const token = ensureAuthToken(paths.token, "Enigma");
 	const { vault, extra } = buildVault();
 	const clients = createClientRegistry(extra.clientRegistryFile);
-	const deps = { vault, token, clients, logger, ...(polkitEnabled(process.env) ? { polkitCheck: createPkcheckAuthorizer() } : {}) };
+	// Tool/operation usage metrics -- see request-metrics.ts's own header comment for why this
+	// daemon records/exposes them by hand instead of useExecutionMiddleware/
+	// registerVehicleMetricsOperations (no VehicleRegistry exists here). Queryable via the
+	// admin-only GET /metrics route in server.ts. mkdirSync first: unlike every other Vehicle
+	// daemon in this ecosystem, Enigma is vault-only and never opens its own paths.database
+	// (see paths.ts) -- nothing else has ever created this directory before.
+	mkdirSync(dirname(paths.metrics), { recursive: true });
+	const metrics = openVehicleMetricsStore(paths.metrics);
+	const deps = {
+		vault,
+		token,
+		clients,
+		logger,
+		metrics,
+		...(polkitEnabled(process.env) ? { polkitCheck: createPkcheckAuthorizer() } : {}),
+	};
 
 	// World-connectable: any OS user's process may attempt to connect (SO_PEERCRED verifies
 	// who they actually are afterward, which a file permission bit can't do more precisely
@@ -78,6 +95,9 @@ export function serveMain(): void {
 		logger,
 		buildApp: () => createApp(deps),
 		onListen: ({ host, port }) => logger.info("listening", { host, port, unixSocketPath }),
-		onShutdown: () => unixServer.stop(),
+		onShutdown: () => {
+			unixServer.stop();
+			metrics.close();
+		},
 	});
 }

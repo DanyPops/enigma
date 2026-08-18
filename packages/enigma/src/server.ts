@@ -6,6 +6,7 @@
  */
 
 import type { Logger } from "@danypops/vehicle-server/logging";
+import type { VehicleMetricsQuery, VehicleMetricsStore } from "@danypops/vehicle-server/metrics";
 import {
 	errorResponse,
 	extractBearerToken,
@@ -27,6 +28,7 @@ import {
 import type { CredentialVault } from "./credential-vault.ts";
 import type { OidcFetch } from "./login-command.ts";
 import { ENIGMA_MANAGE_CLIENTS_ACTION_ID, type PolkitCheck } from "./polkit-check.ts";
+import { queryEnigmaMetrics, withEnigmaRequestMetrics } from "./request-metrics.ts";
 import { VERSION } from "./version.ts";
 
 export interface ServerDeps {
@@ -55,6 +57,14 @@ export interface ServerDeps {
 	 * clicking a dialog, unacceptable latency for anything on the hot path).
 	 */
 	polkitCheck?: PolkitCheck;
+	/**
+	 * Tool/operation usage metrics -- see request-metrics.ts's own header comment for why this
+	 * daemon records/exposes them by hand instead of through useExecutionMiddleware/
+	 * registerVehicleMetricsOperations (no VehicleRegistry exists here). Optional so existing
+	 * tests constructing ServerDeps without one keep working; a production daemon should always
+	 * supply the real store (see daemon.ts).
+	 */
+	metrics?: VehicleMetricsStore;
 }
 
 /**
@@ -202,6 +212,19 @@ async function handleRequest(request: Request, deps: ServerDeps, identity: Ident
 
 	if (request.method === "GET" && url.pathname === "/health") return healthResponse(VERSION);
 	if (request.method === "GET" && url.pathname === "/ready") return readyResponse(true);
+	if (request.method === "GET" && url.pathname === "/metrics") {
+		if (!deps.metrics) return jsonResponse([]);
+		const params = url.searchParams;
+		const groupBy = params.get("groupBy");
+		return jsonResponse(
+			queryEnigmaMetrics(deps.metrics, {
+				...(params.has("since") ? { since: Number(params.get("since")) } : {}),
+				...(params.has("until") ? { until: Number(params.get("until")) } : {}),
+				...(params.has("toolName") ? { toolName: params.get("toolName") as string } : {}),
+				...(groupBy ? { groupBy: groupBy.split(",") as VehicleMetricsQuery["groupBy"] } : {}),
+			}),
+		);
+	}
 	if (request.method === "GET" && url.pathname === "/keys") {
 		return jsonResponse(deps.vault.listBackends());
 	}
@@ -271,10 +294,11 @@ async function handleRequest(request: Request, deps: ServerDeps, identity: Ident
 }
 
 export function createApp(deps: ServerDeps): { fetch(request: Request): Promise<Response> } {
+	const dispatch = (request: Request) => handleRequest(request, deps, identityFromBearer(request, deps));
 	return {
 		// No peer at all over this transport -- polkitCheck (peer-keyed) can never apply here,
 		// by construction, not merely by convention.
-		fetch: (request: Request) => handleRequest(request, deps, identityFromBearer(request, deps)),
+		fetch: deps.metrics ? withEnigmaRequestMetrics(dispatch, deps.metrics, (request) => request) : dispatch,
 	};
 }
 
@@ -291,7 +315,7 @@ export interface UnixSocketIdentityOptions {
  * no bearer-token concept here at all -- any header is simply ignored).
  */
 export function createUnixSocketHandler(deps: ServerDeps, options: UnixSocketIdentityOptions = {}) {
-	return (request: Request, peer: PeerCredential): Promise<Response> => {
+	const dispatch = (request: Request, peer: PeerCredential): Promise<Response> => {
 		const identity: Identity =
 			options.adminUid !== undefined && peer.uid === options.adminUid
 				? { kind: "admin", uid: peer.uid }
@@ -301,4 +325,5 @@ export function createUnixSocketHandler(deps: ServerDeps, options: UnixSocketIde
 					})();
 		return handleRequest(request, deps, identity, peer);
 	};
+	return deps.metrics ? withEnigmaRequestMetrics(dispatch, deps.metrics, (request) => request) : dispatch;
 }
