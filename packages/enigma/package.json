@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/enigma",
-	"version": "0.22.3",
+	"version": "0.22.4",
 	"license": "MIT",
 	"description": "Encrypted credential vault daemon: holds delegated OAuth/API credentials, serves each registered consumer only its own scoped credentials over an authenticated local endpoint",
 	"type": "module",
@@ -20,7 +20,7 @@
 		"check": "bun x tsc --noEmit"
 	},
 	"dependencies": {
-		"@danypops/enigma-client": "^0.6.4",
+		"@danypops/enigma-client": "^0.6.5",
 		"@danypops/vehicle-client": "^0.10.3",
 		"@danypops/vehicle-client-pi": "^0.43.1",
 		"@danypops/vehicle-server": "^0.25.2",
